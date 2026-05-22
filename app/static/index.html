@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter Image Automation Tool</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="page-shell">
+    <section class="hero">
+      <p class="eyebrow">PFE Testing Tool</p>
+      <h1>Chapter Image Automation Tool</h1>
+      <p class="hero-copy">
+        Preview ordered chapter images, run sequential downloads, and inspect durable execution reports.
+      </p>
+    </section>
+
+    <section class="panel">
+      <label class="input-label" for="chapter-url">Chapter URL</label>
+      <div class="controls">
+        <input
+          id="chapter-url"
+          name="chapter-url"
+          type="url"
+          placeholder="http://localhost:3001/chapter-1.html"
+          autocomplete="off"
+        >
+        <button id="preview-button" type="button">Preview</button>
+        <button id="download-button" type="button">Download</button>
+      </div>
+      <p class="hint">
+        UI uses existing API endpoints: <code>POST /api/chapters/preview</code> and <code>POST /api/chapters/download</code>.
+      </p>
+    </section>
+
+    <section id="error-panel" class="panel status-panel hidden" aria-live="polite">
+      <h2>Errors</h2>
+      <div id="error-message" class="status-message error-message"></div>
+    </section>
+
+    <section id="preview-panel" class="panel hidden" aria-live="polite">
+      <div class="section-header">
+        <h2>Preview Results</h2>
+        <span id="preview-loading" class="loading-indicator hidden">Previewing...</span>
+      </div>
+      <div id="preview-summary" class="summary-grid"></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Index</th>
+              <th>Image URL</th>
+              <th>Filename</th>
+            </tr>
+          </thead>
+          <tbody id="preview-table-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="download-panel" class="panel hidden" aria-live="polite">
+      <div class="section-header">
+        <h2>Download Report</h2>
+        <span id="download-loading" class="loading-indicator hidden">Downloading...</span>
+      </div>
+      <div id="download-summary" class="summary-grid"></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Index</th>
+              <th>Image URL</th>
+              <th>Filename</th>
+              <th>Status</th>
+              <th>Saved Path</th>
+              <th>Error</th>
+            </tr>
+          </thead>
+          <tbody id="download-table-body"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
