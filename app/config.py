@@ -1,9 +1,16 @@
 import os
 from dataclasses import dataclass
 
+from dotenv import load_dotenv
+
+
+load_dotenv()
+
 
 SUPPORTED_URL_ACCESS_MODES = {"local_only", "allowlist", "open"}
 SUPPORTED_HTTP_SCHEMES = {"http", "https"}
+SUPPORTED_SSL_VERIFY_MODES = {"default", "truststore", "disabled"}
+SUPPORTED_CAPTURE_STOP_POLICIES = {"sequence_stable", "duration"}
 
 
 @dataclass
@@ -13,10 +20,48 @@ class Settings:
     http_timeout_seconds: float
     default_image_extension: str
     download_base_dir: str
+    http_user_agent: str
+    ssl_verify_mode: str
+    browser_executable_path: str | None
+    playwright_browser_channel: str | None
+    browser_headless: bool
+    browser_user_data_dir: str | None
+    browser_persistent_context_enabled: bool
+    browser_scroll_enabled: bool
+    browser_max_scroll_steps: int
+    browser_scroll_wait_ms: int
+    browser_initial_wait_ms: int
+    browser_scroll_stable_rounds: int
+    browser_max_scroll_containers: int
+    browser_scroll_delta_px: int
+    browser_capture_default_seconds: int
+    browser_capture_max_seconds: int
+    browser_capture_stop_policy: str
+    browser_autonomous_capture_enabled: bool
+    browser_autonomous_max_steps: int
+    browser_autonomous_step_wait_ms: int
+    browser_autonomous_stable_rounds: int
+    browser_autonomous_enable_keyboard: bool
+    browser_autonomous_enable_mouse_wheel: bool
+    browser_reader_readiness_enabled: bool
+    browser_overlay_dismiss_enabled: bool
+    browser_overlay_max_attempts: int
+    browser_carousel_exploration_enabled: bool
+    browser_carousel_max_steps: int
+    browser_sequence_stable_rounds: int
 
 
 def _parse_allowed_hosts(raw_value: str) -> list[str]:
     return [host.strip().lower() for host in raw_value.split(",") if host.strip()]
+
+
+def _parse_bool(raw_value: str, default: bool) -> bool:
+    normalized = raw_value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def get_settings() -> Settings:
@@ -42,6 +87,163 @@ def get_settings() -> Settings:
         default_image_extension = f".{default_image_extension}"
 
     download_base_dir = os.getenv("DOWNLOAD_BASE_DIR", "downloads").strip() or "downloads"
+    http_user_agent = (
+        os.getenv(
+            "HTTP_USER_AGENT",
+            "Mozilla/5.0 ChapterDownloaderTool/1.0",
+        ).strip()
+        or "Mozilla/5.0 ChapterDownloaderTool/1.0"
+    )
+    ssl_verify_mode = os.getenv("SSL_VERIFY_MODE", "default").strip().lower()
+    if ssl_verify_mode not in SUPPORTED_SSL_VERIFY_MODES:
+        ssl_verify_mode = "default"
+    browser_executable_path = os.getenv("BROWSER_EXECUTABLE_PATH", "").strip() or None
+    playwright_browser_channel = (
+        os.getenv("PLAYWRIGHT_BROWSER_CHANNEL", "").strip() or None
+    )
+    browser_headless = _parse_bool(
+        os.getenv("BROWSER_HEADLESS", "true"),
+        True,
+    )
+    browser_user_data_dir = os.getenv("BROWSER_USER_DATA_DIR", "").strip() or None
+    browser_persistent_context_enabled = _parse_bool(
+        os.getenv("BROWSER_PERSISTENT_CONTEXT_ENABLED", "false"),
+        False,
+    )
+    browser_autonomous_capture_enabled = _parse_bool(
+        os.getenv("BROWSER_AUTONOMOUS_CAPTURE_ENABLED", "true"),
+        True,
+    )
+    browser_autonomous_enable_keyboard = _parse_bool(
+        os.getenv("BROWSER_AUTONOMOUS_ENABLE_KEYBOARD", "true"),
+        True,
+    )
+    browser_autonomous_enable_mouse_wheel = _parse_bool(
+        os.getenv("BROWSER_AUTONOMOUS_ENABLE_MOUSE_WHEEL", "true"),
+        True,
+    )
+    browser_reader_readiness_enabled = _parse_bool(
+        os.getenv("BROWSER_READER_READINESS_ENABLED", "true"),
+        True,
+    )
+    browser_overlay_dismiss_enabled = _parse_bool(
+        os.getenv("BROWSER_OVERLAY_DISMISS_ENABLED", "true"),
+        True,
+    )
+    browser_carousel_exploration_enabled = _parse_bool(
+        os.getenv("BROWSER_CAROUSEL_EXPLORATION_ENABLED", "true"),
+        True,
+    )
+    browser_scroll_enabled = _parse_bool(
+        os.getenv("BROWSER_SCROLL_ENABLED", "true"),
+        True,
+    )
+    max_scroll_steps_raw = os.getenv("BROWSER_MAX_SCROLL_STEPS", "30").strip()
+    scroll_wait_ms_raw = os.getenv("BROWSER_SCROLL_WAIT_MS", "500").strip()
+    initial_wait_ms_raw = os.getenv("BROWSER_INITIAL_WAIT_MS", "1200").strip()
+    stable_rounds_raw = os.getenv("BROWSER_SCROLL_STABLE_ROUNDS", "3").strip()
+    max_scroll_containers_raw = os.getenv("BROWSER_MAX_SCROLL_CONTAINERS", "5").strip()
+    scroll_delta_px_raw = os.getenv("BROWSER_SCROLL_DELTA_PX", "1000").strip()
+    capture_default_seconds_raw = os.getenv("BROWSER_CAPTURE_DEFAULT_SECONDS", "30").strip()
+    capture_max_seconds_raw = os.getenv("BROWSER_CAPTURE_MAX_SECONDS", "120").strip()
+    browser_capture_stop_policy = (
+        os.getenv("BROWSER_CAPTURE_STOP_POLICY", "sequence_stable").strip().lower()
+    )
+    if browser_capture_stop_policy not in SUPPORTED_CAPTURE_STOP_POLICIES:
+        browser_capture_stop_policy = "sequence_stable"
+    autonomous_max_steps_raw = os.getenv("BROWSER_AUTONOMOUS_MAX_STEPS", "60").strip()
+    autonomous_step_wait_ms_raw = os.getenv("BROWSER_AUTONOMOUS_STEP_WAIT_MS", "700").strip()
+    autonomous_stable_rounds_raw = os.getenv("BROWSER_AUTONOMOUS_STABLE_ROUNDS", "5").strip()
+    overlay_max_attempts_raw = os.getenv("BROWSER_OVERLAY_MAX_ATTEMPTS", "3").strip()
+    carousel_max_steps_raw = os.getenv("BROWSER_CAROUSEL_MAX_STEPS", "80").strip()
+    sequence_stable_rounds_raw = os.getenv("BROWSER_SEQUENCE_STABLE_ROUNDS", "6").strip()
+    try:
+        browser_max_scroll_steps = int(max_scroll_steps_raw)
+    except ValueError:
+        browser_max_scroll_steps = 30
+    try:
+        browser_scroll_wait_ms = int(scroll_wait_ms_raw)
+    except ValueError:
+        browser_scroll_wait_ms = 500
+    try:
+        browser_initial_wait_ms = int(initial_wait_ms_raw)
+    except ValueError:
+        browser_initial_wait_ms = 1200
+    try:
+        browser_scroll_stable_rounds = int(stable_rounds_raw)
+    except ValueError:
+        browser_scroll_stable_rounds = 3
+    try:
+        browser_max_scroll_containers = int(max_scroll_containers_raw)
+    except ValueError:
+        browser_max_scroll_containers = 5
+    try:
+        browser_scroll_delta_px = int(scroll_delta_px_raw)
+    except ValueError:
+        browser_scroll_delta_px = 1000
+    try:
+        browser_capture_default_seconds = int(capture_default_seconds_raw)
+    except ValueError:
+        browser_capture_default_seconds = 30
+    try:
+        browser_capture_max_seconds = int(capture_max_seconds_raw)
+    except ValueError:
+        browser_capture_max_seconds = 120
+    try:
+        browser_autonomous_max_steps = int(autonomous_max_steps_raw)
+    except ValueError:
+        browser_autonomous_max_steps = 60
+    try:
+        browser_autonomous_step_wait_ms = int(autonomous_step_wait_ms_raw)
+    except ValueError:
+        browser_autonomous_step_wait_ms = 700
+    try:
+        browser_autonomous_stable_rounds = int(autonomous_stable_rounds_raw)
+    except ValueError:
+        browser_autonomous_stable_rounds = 5
+    try:
+        browser_overlay_max_attempts = int(overlay_max_attempts_raw)
+    except ValueError:
+        browser_overlay_max_attempts = 3
+    try:
+        browser_carousel_max_steps = int(carousel_max_steps_raw)
+    except ValueError:
+        browser_carousel_max_steps = 80
+    try:
+        browser_sequence_stable_rounds = int(sequence_stable_rounds_raw)
+    except ValueError:
+        browser_sequence_stable_rounds = 6
+
+    if browser_max_scroll_steps < 0:
+        browser_max_scroll_steps = 30
+    if browser_scroll_wait_ms < 0:
+        browser_scroll_wait_ms = 500
+    if browser_initial_wait_ms < 0:
+        browser_initial_wait_ms = 1200
+    if browser_scroll_stable_rounds < 0:
+        browser_scroll_stable_rounds = 3
+    if browser_max_scroll_containers < 0:
+        browser_max_scroll_containers = 5
+    if browser_scroll_delta_px <= 0:
+        browser_scroll_delta_px = 1000
+    if browser_capture_max_seconds < 5:
+        browser_capture_max_seconds = 120
+    if browser_capture_default_seconds < 5:
+        browser_capture_default_seconds = 30
+    if browser_capture_default_seconds > browser_capture_max_seconds:
+        browser_capture_default_seconds = browser_capture_max_seconds
+    if browser_autonomous_max_steps < 0:
+        browser_autonomous_max_steps = 60
+    if browser_autonomous_step_wait_ms < 0:
+        browser_autonomous_step_wait_ms = 700
+    if browser_autonomous_stable_rounds < 0:
+        browser_autonomous_stable_rounds = 5
+    if browser_overlay_max_attempts < 0:
+        browser_overlay_max_attempts = 3
+    if browser_carousel_max_steps < 0:
+        browser_carousel_max_steps = 80
+    if browser_sequence_stable_rounds < 0:
+        browser_sequence_stable_rounds = 6
 
     return Settings(
         url_access_mode=url_access_mode,
@@ -49,4 +251,33 @@ def get_settings() -> Settings:
         http_timeout_seconds=http_timeout_seconds,
         default_image_extension=default_image_extension.lower(),
         download_base_dir=download_base_dir,
+        http_user_agent=http_user_agent,
+        ssl_verify_mode=ssl_verify_mode,
+        browser_executable_path=browser_executable_path,
+        playwright_browser_channel=playwright_browser_channel,
+        browser_headless=browser_headless,
+        browser_user_data_dir=browser_user_data_dir,
+        browser_persistent_context_enabled=browser_persistent_context_enabled,
+        browser_scroll_enabled=browser_scroll_enabled,
+        browser_max_scroll_steps=browser_max_scroll_steps,
+        browser_scroll_wait_ms=browser_scroll_wait_ms,
+        browser_initial_wait_ms=browser_initial_wait_ms,
+        browser_scroll_stable_rounds=browser_scroll_stable_rounds,
+        browser_max_scroll_containers=browser_max_scroll_containers,
+        browser_scroll_delta_px=browser_scroll_delta_px,
+        browser_capture_default_seconds=browser_capture_default_seconds,
+        browser_capture_max_seconds=browser_capture_max_seconds,
+        browser_capture_stop_policy=browser_capture_stop_policy,
+        browser_autonomous_capture_enabled=browser_autonomous_capture_enabled,
+        browser_autonomous_max_steps=browser_autonomous_max_steps,
+        browser_autonomous_step_wait_ms=browser_autonomous_step_wait_ms,
+        browser_autonomous_stable_rounds=browser_autonomous_stable_rounds,
+        browser_autonomous_enable_keyboard=browser_autonomous_enable_keyboard,
+        browser_autonomous_enable_mouse_wheel=browser_autonomous_enable_mouse_wheel,
+        browser_reader_readiness_enabled=browser_reader_readiness_enabled,
+        browser_overlay_dismiss_enabled=browser_overlay_dismiss_enabled,
+        browser_overlay_max_attempts=browser_overlay_max_attempts,
+        browser_carousel_exploration_enabled=browser_carousel_exploration_enabled,
+        browser_carousel_max_steps=browser_carousel_max_steps,
+        browser_sequence_stable_rounds=browser_sequence_stable_rounds,
     )

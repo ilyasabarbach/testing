@@ -1,13 +1,23 @@
 const urlInput = document.getElementById("chapter-url");
+const followRedirectsInput = document.getElementById("follow-redirects");
 const previewButton = document.getElementById("preview-button");
+const inspectButton = document.getElementById("inspect-button");
 const downloadButton = document.getElementById("download-button");
 
 const errorPanel = document.getElementById("error-panel");
 const errorMessage = document.getElementById("error-message");
 
+const inspectPanel = document.getElementById("inspect-panel");
+const inspectLoading = document.getElementById("inspect-loading");
+const inspectSummary = document.getElementById("inspect-summary");
+const inspectDetailsBody = document.getElementById("inspect-details-body");
+
 const previewPanel = document.getElementById("preview-panel");
 const previewLoading = document.getElementById("preview-loading");
 const previewSummary = document.getElementById("preview-summary");
+const previewDiagnostics = document.getElementById("preview-diagnostics");
+const previewDiagnosticsSummary = document.getElementById("preview-diagnostics-summary");
+const previewDiagnosticsBody = document.getElementById("preview-diagnostics-body");
 const previewTableBody = document.getElementById("preview-table-body");
 
 const downloadPanel = document.getElementById("download-panel");
@@ -43,6 +53,11 @@ function setLoading(target, isLoading) {
     previewButton.disabled = isLoading;
   }
 
+  if (target === "inspect") {
+    inspectLoading.classList.toggle("hidden", !isLoading);
+    inspectButton.disabled = isLoading;
+  }
+
   if (target === "download") {
     downloadLoading.classList.toggle("hidden", !isLoading);
     downloadButton.disabled = isLoading;
@@ -58,6 +73,18 @@ function buildSummaryItem(label, value) {
   `;
 }
 
+function renderNotes(notes) {
+  if (!notes || notes.length === 0) {
+    return "";
+  }
+
+  return `
+    <ul class="note-list">
+      ${notes.map((note) => `<li>${note}</li>`).join("")}
+    </ul>
+  `;
+}
+
 function renderPreview(data) {
   previewPanel.classList.remove("hidden");
   previewSummary.innerHTML = [
@@ -65,12 +92,89 @@ function renderPreview(data) {
     buildSummaryItem("Image Count", data.imageCount),
   ].join("");
 
+  renderPreviewDiagnostics(data.diagnostics);
+
   previewTableBody.innerHTML = data.images
     .map((image) => `
       <tr>
         <td>${image.index}</td>
         <td>${image.url}</td>
         <td>${image.filename}</td>
+      </tr>
+    `)
+    .join("");
+}
+
+function renderPreviewDiagnostics(diagnostics) {
+  if (!diagnostics) {
+    previewDiagnostics.classList.add("hidden");
+    return;
+  }
+
+  previewDiagnostics.classList.remove("hidden");
+  previewDiagnosticsSummary.innerHTML = [
+    buildSummaryItem("HTML Length", diagnostics.htmlLength),
+    buildSummaryItem("IMG Tag Count", diagnostics.imgTagCount),
+    buildSummaryItem("Looks Dynamic", diagnostics.looksDynamic ? "Yes" : "No"),
+    buildSummaryItem("App Root Shell", diagnostics.hasAppRootShell ? "Yes" : "No"),
+    buildSummaryItem(
+      "API-Driven Signals",
+      diagnostics.possibleApiDrivenPage ? "Yes" : "No",
+    ),
+    buildSummaryItem("Deduplicated", diagnostics.deduplicatedCount),
+  ].join("");
+
+  const details = [
+    ["Images From src", diagnostics.imagesFromSrc],
+    ["Images From data-src", diagnostics.imagesFromDataSrc],
+    ["Images From data-lazy-src", diagnostics.imagesFromDataLazySrc],
+    ["Images From data-original", diagnostics.imagesFromDataOriginal],
+    ["Images From data-url", diagnostics.imagesFromDataUrl],
+    ["Images From srcset", diagnostics.imagesFromSrcset],
+    ["Images From source srcset", diagnostics.imagesFromSourceSrcset],
+    ["Images From meta", diagnostics.imagesFromMeta],
+    ["JSON Script Count", diagnostics.jsonScriptCount],
+    ["Embedded JSON Image URL Count", diagnostics.embeddedImageUrlCount],
+    ["Images From Embedded JSON", diagnostics.imagesFromEmbeddedJson],
+    ["Has App Root Shell", diagnostics.hasAppRootShell ? "Yes" : "No"],
+    [
+      "Possible API-Driven Page",
+      diagnostics.possibleApiDrivenPage ? "Yes" : "No",
+    ],
+    ["Notes", renderNotes(diagnostics.notes ?? [])],
+  ];
+
+  previewDiagnosticsBody.innerHTML = details
+    .map(([label, value]) => `
+      <tr>
+        <th>${label}</th>
+        <td>${value ?? ""}</td>
+      </tr>
+    `)
+    .join("");
+}
+
+function renderInspectReport(data) {
+  inspectPanel.classList.remove("hidden");
+  inspectSummary.innerHTML = [
+    buildSummaryItem("Original URL", data.url),
+    buildSummaryItem("Final URL", data.finalUrl),
+    buildSummaryItem("Status Code", data.statusCode),
+    buildSummaryItem("Redirect", data.isRedirect ? "Yes" : "No"),
+  ].join("");
+
+  const details = [
+    ["Redirect Location", data.redirectLocation ?? ""],
+    ["Content Type", data.contentType ?? ""],
+    ["Server", data.server ?? ""],
+    ["Body Preview", data.bodyPreview ?? ""],
+  ];
+
+  inspectDetailsBody.innerHTML = details
+    .map(([label, value]) => `
+      <tr>
+        <th>${label}</th>
+        <td>${value}</td>
       </tr>
     `)
     .join("");
@@ -104,13 +208,13 @@ function renderDownloadReport(data) {
     .join("");
 }
 
-async function callJsonApi(path, url) {
+async function callJsonApi(path, payload) {
   const response = await fetch(path, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ url }),
+    body: JSON.stringify(payload),
   });
 
   const data = await response.json().catch(() => ({}));
@@ -130,12 +234,32 @@ previewButton.addEventListener("click", async () => {
 
   setLoading("preview", true);
   try {
-    const data = await callJsonApi("/api/chapters/preview", url);
+    const data = await callJsonApi("/api/chapters/preview", { url });
     renderPreview(data);
   } catch (error) {
     showError(error.message);
   } finally {
     setLoading("preview", false);
+  }
+});
+
+inspectButton.addEventListener("click", async () => {
+  const url = readUrlOrShowError();
+  if (!url) {
+    return;
+  }
+
+  setLoading("inspect", true);
+  try {
+    const data = await callJsonApi("/api/network/inspect", {
+      url,
+      followRedirects: followRedirectsInput.checked,
+    });
+    renderInspectReport(data);
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    setLoading("inspect", false);
   }
 });
 
@@ -147,7 +271,7 @@ downloadButton.addEventListener("click", async () => {
 
   setLoading("download", true);
   try {
-    const data = await callJsonApi("/api/chapters/download", url);
+    const data = await callJsonApi("/api/chapters/download", { url });
     renderDownloadReport(data);
   } catch (error) {
     showError(error.message);

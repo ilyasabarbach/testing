@@ -26,12 +26,35 @@
           placeholder="http://localhost:3001/chapter-1.html"
           autocomplete="off"
         >
+        <label class="checkbox-control" for="follow-redirects">
+          <input id="follow-redirects" name="follow-redirects" type="checkbox">
+          <span>Follow redirects</span>
+        </label>
+      </div>
+      <div class="controls action-controls">
         <button id="preview-button" type="button">Preview</button>
+        <button id="inspect-button" type="button">Inspect Network</button>
         <button id="download-button" type="button">Download</button>
       </div>
       <p class="hint">
-        UI uses existing API endpoints: <code>POST /api/chapters/preview</code> and <code>POST /api/chapters/download</code>.
+        Inspect defaults to redirect-aware diagnostics off, which makes HTTP 301 to HTTPS easier to see.
       </p>
+      <p class="hint">
+        UI uses existing API endpoints: <code>POST /api/chapters/preview</code>, <code>POST /api/network/inspect</code>, and <code>POST /api/chapters/download</code>.
+      </p>
+    </section>
+
+    <section id="inspect-panel" class="panel hidden" aria-live="polite">
+      <div class="section-header">
+        <h2>Network Inspect</h2>
+        <span id="inspect-loading" class="loading-indicator hidden">Inspecting...</span>
+      </div>
+      <div id="inspect-summary" class="summary-grid"></div>
+      <div class="table-wrap">
+        <table>
+          <tbody id="inspect-details-body"></tbody>
+        </table>
+      </div>
     </section>
 
     <section id="error-panel" class="panel status-panel hidden" aria-live="polite">
@@ -45,6 +68,15 @@
         <span id="preview-loading" class="loading-indicator hidden">Previewing...</span>
       </div>
       <div id="preview-summary" class="summary-grid"></div>
+      <div id="preview-diagnostics" class="diagnostic-block hidden">
+        <h3>Preview Diagnostics</h3>
+        <div id="preview-diagnostics-summary" class="summary-grid"></div>
+        <div class="table-wrap">
+          <table>
+            <tbody id="preview-diagnostics-body"></tbody>
+          </table>
+        </div>
+      </div>
       <div class="table-wrap">
         <table>
           <thead>
