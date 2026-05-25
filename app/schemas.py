@@ -108,6 +108,11 @@ class ChapterCaptureDiagnostics(BaseModel):
     selectionStrategy: str
     dominantSequenceDetected: bool
     dominantSequenceLength: int
+    numericOrderingApplied: bool
+    duplicatePageNumberCount: int
+    missingPageNumbers: list[int]
+    selectedPageNumbers: list[int]
+    orderingStrategy: str
     readerReadinessEnabled: bool
     overlayDismissEnabled: bool
     overlayDismissAttempts: int

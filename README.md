@@ -445,6 +445,12 @@ Reader readiness:
 
 Autonomous mode tracks dominant reader sequence length. It also tries to prefer dominant numeric reader image sequences like `01.webp` through `16.webp`, while excluding common asset names like logo/icon/avatar/banner when they do not belong to the reader sequence.
 
+Capture ordering:
+- when a dominant numeric sequence is detected, selected images are sorted by detected page number, so `01.webp`, `03.webp`, `02.webp` becomes `01.webp`, `02.webp`, `03.webp`
+- filenames are regenerated after filtering and ordering, for example `01.webp` becomes `001.webp`
+- duplicate URLs for the same detected page number keep the first discovered valid URL
+- gaps are reported in diagnostics when practical, but the tool does not invent missing image URLs
+
 Persistent capture profile:
 - capture worker respects `BROWSER_HEADLESS`, `BROWSER_PERSISTENT_CONTEXT_ENABLED`, `BROWSER_USER_DATA_DIR`, `BROWSER_EXECUTABLE_PATH`, and `PLAYWRIGHT_BROWSER_CHANNEL`
 - when persistent context is enabled with user data dir, cookies/localStorage/session state can be reused across captures

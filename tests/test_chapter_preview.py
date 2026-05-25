@@ -2365,6 +2365,109 @@ def test_dominant_numeric_sequence_filtering_excludes_assets() -> None:
     assert diagnostics["dominantSequenceDetected"] is True
     assert diagnostics["dominantSequenceLength"] == 3
     assert diagnostics["selectionStrategy"] == "dominant_numeric_sequence"
+    assert diagnostics["numericOrderingApplied"] is True
+    assert diagnostics["orderingStrategy"] == "numeric_page_number"
+    assert diagnostics["selectedPageNumbers"] == [1, 2, 3]
+
+
+def test_numeric_sequence_sorting_orders_pages_by_number() -> None:
+    from app.services.browser_capture import select_reader_sequence
+
+    items = [
+        {"url": "https://example.com/pages/01.webp", "source": "network"},
+        {"url": "https://example.com/pages/03.webp", "source": "network"},
+        {"url": "https://example.com/pages/02.webp", "source": "network"},
+        {"url": "https://example.com/pages/04.webp", "source": "network"},
+    ]
+
+    selected, diagnostics = select_reader_sequence(items)
+
+    assert [item["url"].rsplit("/", 1)[1] for item in selected] == [
+        "01.webp",
+        "02.webp",
+        "03.webp",
+        "04.webp",
+    ]
+    assert diagnostics["selectedPageNumbers"] == [1, 2, 3, 4]
+    assert diagnostics["missingPageNumbers"] == []
+
+
+def test_page_dash_numeric_sequence_sorting_works() -> None:
+    from app.services.browser_capture import select_reader_sequence
+
+    items = [
+        {"url": "https://example.com/page-003.jpg", "source": "network"},
+        {"url": "https://example.com/page-001.jpg", "source": "network"},
+        {"url": "https://example.com/page-002.jpg", "source": "dom"},
+    ]
+
+    selected, diagnostics = select_reader_sequence(items)
+
+    assert [item["url"].rsplit("/", 1)[1] for item in selected] == [
+        "page-001.jpg",
+        "page-002.jpg",
+        "page-003.jpg",
+    ]
+    assert diagnostics["numericOrderingApplied"] is True
+
+
+def test_numeric_sequence_sorting_places_09_before_10() -> None:
+    from app.services.browser_capture import select_reader_sequence
+
+    items = [
+        {"url": "https://example.com/pages/10.webp", "source": "network"},
+        {"url": "https://example.com/pages/09.webp", "source": "network"},
+        {"url": "https://example.com/pages/11.webp", "source": "network"},
+    ]
+
+    selected, diagnostics = select_reader_sequence(items)
+
+    assert [item["url"].rsplit("/", 1)[1] for item in selected] == [
+        "09.webp",
+        "10.webp",
+        "11.webp",
+    ]
+    assert diagnostics["selectedPageNumbers"] == [9, 10, 11]
+
+
+def test_duplicate_page_number_is_deduplicated() -> None:
+    from app.services.browser_capture import select_reader_sequence
+
+    items = [
+        {"url": "https://example.com/pages/01.webp?token=first", "source": "network"},
+        {"url": "https://example.com/pages/02.webp", "source": "network"},
+        {"url": "https://example.com/pages/01.webp?token=second", "source": "dom"},
+        {"url": "https://example.com/pages/03.webp", "source": "network"},
+    ]
+
+    selected, diagnostics = select_reader_sequence(items)
+
+    assert [item["url"] for item in selected] == [
+        "https://example.com/pages/01.webp?token=first",
+        "https://example.com/pages/02.webp",
+        "https://example.com/pages/03.webp",
+    ]
+    assert diagnostics["duplicatePageNumberCount"] == 1
+    assert diagnostics["selectedPageNumbers"] == [1, 2, 3]
+
+
+def test_missing_page_numbers_are_reported() -> None:
+    from app.services.browser_capture import select_reader_sequence
+
+    items = [
+        {"url": "https://example.com/pages/01.webp", "source": "network"},
+        {"url": "https://example.com/pages/03.webp", "source": "network"},
+        {"url": "https://example.com/pages/04.webp", "source": "network"},
+    ]
+
+    selected, diagnostics = select_reader_sequence(items)
+
+    assert [item["url"].rsplit("/", 1)[1] for item in selected] == [
+        "01.webp",
+        "03.webp",
+        "04.webp",
+    ]
+    assert diagnostics["missingPageNumbers"] == [2]
 
 
 def test_capture_filenames_regenerated_after_filtering(monkeypatch) -> None:
@@ -2378,9 +2481,9 @@ def test_capture_filenames_regenerated_after_filtering(monkeypatch) -> None:
                     "ok": True,
                     "images": [
                         {"url": "https://example.com/logo.png", "source": "network"},
+                        {"url": "https://example.com/pages/03.webp", "source": "network"},
                         {"url": "https://example.com/pages/01.webp", "source": "network"},
                         {"url": "https://example.com/pages/02.webp", "source": "network"},
-                        {"url": "https://example.com/pages/03.webp", "source": "network"},
                     ],
                     "networkImageCount": 4,
                     "domImageCount": 0,
@@ -2407,6 +2510,12 @@ def test_capture_filenames_regenerated_after_filtering(monkeypatch) -> None:
         "002.webp",
         "003.webp",
     ]
+    assert [item["url"].rsplit("/", 1)[1] for item in response.json()["images"]] == [
+        "01.webp",
+        "02.webp",
+        "03.webp",
+    ]
+    assert response.json()["diagnostics"]["numericOrderingApplied"] is True
     assert response.json()["diagnostics"]["excludedImageCount"] == 1
 
 
@@ -2423,6 +2532,8 @@ def test_capture_filter_falls_back_to_discovery_order_without_sequence() -> None
     assert selected == items
     assert diagnostics["dominantSequenceDetected"] is False
     assert diagnostics["selectionStrategy"] == "discovery_order"
+    assert diagnostics["numericOrderingApplied"] is False
+    assert diagnostics["orderingStrategy"] == "discovery_order"
 
 
 def test_capture_duration_is_clamped(monkeypatch) -> None:

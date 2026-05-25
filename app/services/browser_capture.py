@@ -135,6 +135,11 @@ async def capture_chapter_images(
             selectionStrategy=selection_diagnostics["selectionStrategy"],
             dominantSequenceDetected=selection_diagnostics["dominantSequenceDetected"],
             dominantSequenceLength=selection_diagnostics["dominantSequenceLength"],
+            numericOrderingApplied=selection_diagnostics["numericOrderingApplied"],
+            duplicatePageNumberCount=selection_diagnostics["duplicatePageNumberCount"],
+            missingPageNumbers=selection_diagnostics["missingPageNumbers"],
+            selectedPageNumbers=selection_diagnostics["selectedPageNumbers"],
+            orderingStrategy=selection_diagnostics["orderingStrategy"],
             readerReadinessEnabled=bool(payload.get("readerReadinessEnabled", False)),
             overlayDismissEnabled=bool(payload.get("overlayDismissEnabled", False)),
             overlayDismissAttempts=int(payload.get("overlayDismissAttempts", 0)),
@@ -182,19 +187,24 @@ def deduplicate_capture_items(raw_items: list[dict]) -> list[dict]:
 
 
 def select_reader_sequence(items: list[dict]) -> tuple[list[dict], dict]:
-    buckets: dict[tuple[str, str], list[dict]] = {}
+    buckets: dict[tuple[str, str], list[tuple[dict, int]]] = {}
     for item in items:
-        sequence_key = _numeric_sequence_key(item["url"])
-        if sequence_key is None:
+        sequence_parts = _numeric_sequence_parts(item["url"])
+        if sequence_parts is None:
             continue
-        buckets.setdefault(sequence_key, []).append(item)
+        sequence_key, page_number = sequence_parts
+        buckets.setdefault(sequence_key, []).append((item, page_number))
 
-    dominant_items = max(buckets.values(), key=len, default=[])
-    if len(dominant_items) >= 3:
-        return dominant_items, {
+    dominant_sequence = max(buckets.values(), key=len, default=[])
+    if len(dominant_sequence) >= 3:
+        selected_items, ordering_diagnostics = _order_dominant_sequence(
+            dominant_sequence
+        )
+        return selected_items, {
             "selectionStrategy": "dominant_numeric_sequence",
             "dominantSequenceDetected": True,
-            "dominantSequenceLength": len(dominant_items),
+            "dominantSequenceLength": len(selected_items),
+            **ordering_diagnostics,
         }
 
     fallback_items = [
@@ -204,10 +214,22 @@ def select_reader_sequence(items: list[dict]) -> tuple[list[dict], dict]:
         "selectionStrategy": "discovery_order",
         "dominantSequenceDetected": False,
         "dominantSequenceLength": 0,
+        "numericOrderingApplied": False,
+        "duplicatePageNumberCount": 0,
+        "missingPageNumbers": [],
+        "selectedPageNumbers": [],
+        "orderingStrategy": "discovery_order",
     }
 
 
 def _numeric_sequence_key(url: str) -> tuple[str, str] | None:
+    sequence_parts = _numeric_sequence_parts(url)
+    if sequence_parts is None:
+        return None
+    return sequence_parts[0]
+
+
+def _numeric_sequence_parts(url: str) -> tuple[tuple[str, str], int] | None:
     parsed = urlparse(url)
     path = parsed.path
     match = re.search(r"(\d+)(?=\.[A-Za-z0-9]+$)", path)
@@ -215,7 +237,48 @@ def _numeric_sequence_key(url: str) -> tuple[str, str] | None:
         return None
     prefix = path[: match.start()]
     suffix = path[match.end() :]
-    return (prefix, suffix)
+    return (prefix, suffix), int(match.group(1))
+
+
+def _order_dominant_sequence(
+    sequence_items: list[tuple[dict, int]],
+) -> tuple[list[dict], dict]:
+    first_item_by_page: dict[int, dict] = {}
+    duplicate_page_number_count = 0
+
+    for item, page_number in sequence_items:
+        if page_number in first_item_by_page:
+            duplicate_page_number_count += 1
+            continue
+        first_item_by_page[page_number] = item
+
+    selected_page_numbers = sorted(first_item_by_page)
+    selected_items = [
+        first_item_by_page[page_number] for page_number in selected_page_numbers
+    ]
+    missing_page_numbers = _missing_page_numbers(selected_page_numbers)
+
+    return selected_items, {
+        "numericOrderingApplied": True,
+        "duplicatePageNumberCount": duplicate_page_number_count,
+        "missingPageNumbers": missing_page_numbers,
+        "selectedPageNumbers": selected_page_numbers,
+        "orderingStrategy": "numeric_page_number",
+    }
+
+
+def _missing_page_numbers(selected_page_numbers: list[int]) -> list[int]:
+    if not selected_page_numbers:
+        return []
+    selected = set(selected_page_numbers)
+    return [
+        page_number
+        for page_number in range(
+            selected_page_numbers[0],
+            selected_page_numbers[-1] + 1,
+        )
+        if page_number not in selected
+    ]
 
 
 def _looks_like_common_asset(url: str) -> bool:
