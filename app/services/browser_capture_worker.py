@@ -36,32 +36,11 @@ FORBIDDEN_OVERLAY_TEXTS = {
     "cookies",
     "age verification",
 }
+READER_BOUNDARY_TERMS = ("comments", "comment", "discussion", "replies", "reviews")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--url", required=True)
-    parser.add_argument("--duration-seconds", required=True, type=int)
-    parser.add_argument("--timeout-ms", required=True, type=int)
-    parser.add_argument("--headless", default="false")
-    parser.add_argument("--browser-executable-path")
-    parser.add_argument("--browser-channel")
-    parser.add_argument("--user-data-dir")
-    parser.add_argument("--persistent-context-enabled", default="false")
-    parser.add_argument("--capture-mode", default="assisted")
-    parser.add_argument("--stop-policy", default="sequence_stable")
-    parser.add_argument("--autonomous-enabled", default="true")
-    parser.add_argument("--autonomous-max-steps", default=60, type=int)
-    parser.add_argument("--autonomous-step-wait-ms", default=700, type=int)
-    parser.add_argument("--autonomous-stable-rounds", default=5, type=int)
-    parser.add_argument("--autonomous-enable-keyboard", default="true")
-    parser.add_argument("--autonomous-enable-mouse-wheel", default="true")
-    parser.add_argument("--reader-readiness-enabled", default="true")
-    parser.add_argument("--overlay-dismiss-enabled", default="true")
-    parser.add_argument("--overlay-max-attempts", default=3, type=int)
-    parser.add_argument("--carousel-exploration-enabled", default="true")
-    parser.add_argument("--carousel-max-steps", default=80, type=int)
-    parser.add_argument("--sequence-stable-rounds", default=6, type=int)
+    parser = build_parser()
     args = parser.parse_args()
 
     try:
@@ -176,6 +155,7 @@ def main() -> int:
                     args,
                     add_image,
                     discovered,
+                    lambda: network_seen_count,
                 )
                 autonomous_notes = autonomous_diagnostics.get("notes", [])
                 autonomous_diagnostics.update(readiness_diagnostics)
@@ -235,6 +215,43 @@ def main() -> int:
                 pass
 
 
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--url", required=True)
+    parser.add_argument("--duration-seconds", required=True, type=int)
+    parser.add_argument("--timeout-ms", required=True, type=int)
+    parser.add_argument("--headless", default="false")
+    parser.add_argument("--browser-executable-path")
+    parser.add_argument("--browser-channel")
+    parser.add_argument("--user-data-dir")
+    parser.add_argument("--persistent-context-enabled", default="false")
+    parser.add_argument("--capture-mode", default="assisted")
+    parser.add_argument("--stop-policy", default="sequence_stable")
+    parser.add_argument("--autonomous-enabled", default="true")
+    parser.add_argument("--autonomous-max-steps", default=60, type=int)
+    parser.add_argument("--autonomous-step-wait-ms", default=700, type=int)
+    parser.add_argument("--autonomous-stable-rounds", default=5, type=int)
+    parser.add_argument("--autonomous-enable-keyboard", default="true")
+    parser.add_argument("--autonomous-enable-mouse-wheel", default="true")
+    parser.add_argument("--reader-readiness-enabled", default="true")
+    parser.add_argument("--overlay-dismiss-enabled", default="true")
+    parser.add_argument("--overlay-max-attempts", default=3, type=int)
+    parser.add_argument("--carousel-exploration-enabled", default="true")
+    parser.add_argument("--carousel-max-steps", default=80, type=int)
+    parser.add_argument("--sequence-stable-rounds", default=6, type=int)
+    parser.add_argument("--smart-stop-min-steps", default=20, type=int)
+    parser.add_argument("--smart-stop-stable-rounds", default=8, type=int)
+    parser.add_argument("--smart-stop-min-sequence-length", default=3, type=int)
+    parser.add_argument("--smart-stop-use-reader-boundary", default="true")
+    parser.add_argument("--large-sequence-mode-enabled", default="true")
+    parser.add_argument("--large-sequence-min-length", default=20, type=int)
+    parser.add_argument("--large-sequence-max-steps", default=1000, type=int)
+    parser.add_argument("--large-sequence-step-wait-ms", default=250, type=int)
+    parser.add_argument("--large-sequence-extend-while-growing", default="true")
+    parser.add_argument("--large-sequence-stable-rounds", default=25, type=int)
+    return parser
+
+
 def _scan_dom_image_urls(page) -> list[str]:
     return page.evaluate(
         """() => {
@@ -255,7 +272,13 @@ def _scan_dom_image_urls(page) -> list[str]:
     )
 
 
-def _run_autonomous_capture(page, args, add_image, discovered: list[dict]) -> dict:
+def _run_autonomous_capture(
+    page,
+    args,
+    add_image,
+    discovered: list[dict],
+    get_network_image_count=None,
+) -> dict:
     actions = _build_autonomous_actions(args)
     diagnostics = _default_autonomous_diagnostics(args, len(discovered))
     diagnostics["autonomousModeEnabled"] = True
@@ -266,22 +289,33 @@ def _run_autonomous_capture(page, args, add_image, discovered: list[dict]) -> di
     deadline = time.monotonic() + args.duration_seconds
     stable_rounds = 0
     last_sequence_length = diagnostics["sequenceLengthBeforeExploration"]
+    last_sequence_growth_step = 0
+    last_network_growth_step = 0
+    productive_action_counts: dict[str, int] = {}
+    action_lookup = _build_action_lookup(actions)
+    last_network_image_count = (
+        int(get_network_image_count()) if callable(get_network_image_count) else 0
+    )
     step = 0
-    max_steps = min(args.autonomous_max_steps, getattr(args, "carousel_max_steps", 80))
+    normal_max_steps = min(
+        args.autonomous_max_steps,
+        getattr(args, "carousel_max_steps", 80),
+    )
+    max_steps = normal_max_steps
     stop_policy = getattr(args, "stop_policy", "sequence_stable")
+    if last_sequence_length >= diagnostics["smartStopMinSequenceLength"]:
+        last_sequence_growth_step = 0
 
-    while (
-        time.monotonic() < deadline
-        and (
-            stop_policy == "duration"
-            or (
-                step < max_steps
-                and stable_rounds < getattr(args, "sequence_stable_rounds", 6)
-            )
-        )
-    ):
+    while time.monotonic() < deadline:
+        action_name = ""
         if step < max_steps:
-            action_name, action = actions[step % len(actions)]
+            action_name, action = _choose_next_action(
+                actions,
+                action_lookup,
+                step,
+                productive_action_counts,
+                diagnostics["largeSequenceModeTriggered"],
+            )
             try:
                 action(page)
                 diagnostics["autonomousActionsUsed"].append(action_name)
@@ -295,36 +329,211 @@ def _run_autonomous_capture(page, args, add_image, discovered: list[dict]) -> di
                 diagnostics["notes"].append(
                     f"Autonomous capture action failed and was skipped: {action_name}."
                 )
+        elif stop_policy != "duration":
+            diagnostics["autonomousStopReason"] = "max_steps_reached"
+            diagnostics["smartStopReason"] = (
+                "max_steps_reached" if diagnostics["smartStopEnabled"] else "none"
+            )
+            if diagnostics["largeSequenceModeTriggered"]:
+                diagnostics["largeSequenceStopReason"] = "max_steps_reached"
+            break
 
-        page.wait_for_timeout(args.autonomous_step_wait_ms)
+        page.wait_for_timeout(
+            _current_step_wait_ms(
+                args,
+                diagnostics["largeSequenceModeTriggered"],
+            )
+        )
         for url in _scan_dom_image_urls(page):
             add_image(url, "dom")
 
         current_sequence_length = _dominant_sequence_length(discovered)
-        stable_rounds = (
-            stable_rounds + 1
-            if current_sequence_length <= last_sequence_length
-            else 0
-        )
+        if current_sequence_length > last_sequence_length:
+            stable_rounds = 0
+            last_sequence_growth_step = step + 1
+            diagnostics["sequenceGrowthEvents"] += 1
+            diagnostics["lastProductiveAction"] = action_name
+            if action_name:
+                productive_action_counts[action_name] = (
+                    productive_action_counts.get(action_name, 0) + 1
+                )
+                diagnostics["productiveActions"] = _sorted_productive_actions(
+                    productive_action_counts
+                )
+        else:
+            stable_rounds += 1
         last_sequence_length = current_sequence_length
+        current_network_image_count = (
+            int(get_network_image_count()) if callable(get_network_image_count) else 0
+        )
+        if current_network_image_count > last_network_image_count:
+            last_network_growth_step = step + 1
+        last_network_image_count = current_network_image_count
+        diagnostics["readerBoundarySuspected"] = (
+            _detect_reader_boundary(page)
+            if _is_true(getattr(args, "smart_stop_use_reader_boundary", "true"))
+            else False
+        )
         step += 1
+        if (
+            diagnostics["sequenceLengthAtNormalStepLimit"] == 0
+            and step >= normal_max_steps
+        ):
+            diagnostics["sequenceLengthAtNormalStepLimit"] = current_sequence_length
+        if _should_enable_large_sequence_mode(
+            diagnostics,
+            current_sequence_length,
+        ):
+            diagnostics["largeSequenceModeTriggered"] = True
+            if _is_true(getattr(args, "large_sequence_extend_while_growing", "true")):
+                max_steps = max(
+                    normal_max_steps,
+                    int(getattr(args, "large_sequence_max_steps", normal_max_steps)),
+                )
+        if diagnostics["largeSequenceModeTriggered"]:
+            diagnostics["largeSequenceStepsExecuted"] += 1
 
-    diagnostics["autonomousStepsExecuted"] = min(step, max_steps)
+        if stop_policy == "duration":
+            continue
+        if (
+            stop_policy == "sequence_stable"
+            and stable_rounds >= getattr(args, "sequence_stable_rounds", 6)
+        ):
+            diagnostics["autonomousStopReason"] = "sequence_stable"
+            diagnostics["stoppedBecauseSequenceStable"] = True
+            break
+        if stop_policy == "smart":
+            smart_reason = _evaluate_smart_stop(
+                diagnostics=diagnostics,
+                step=step,
+                stable_rounds=stable_rounds,
+                current_sequence_length=current_sequence_length,
+                last_network_growth_step=last_network_growth_step,
+            )
+            if smart_reason:
+                diagnostics["smartStopTriggered"] = True
+                diagnostics["smartStopReason"] = smart_reason
+                diagnostics["autonomousStopReason"] = smart_reason
+                if diagnostics["largeSequenceModeTriggered"]:
+                    diagnostics["largeSequenceStopReason"] = smart_reason
+                diagnostics["stoppedBecauseSequenceStable"] = (
+                    smart_reason == "smart_sequence_complete"
+                )
+                break
+
+    diagnostics["autonomousStepsExecuted"] = step
     diagnostics["imageCountStableRounds"] = stable_rounds
     diagnostics["sequenceStableRounds"] = stable_rounds
     diagnostics["imageCountAfterAutonomousActions"] = len(discovered)
     diagnostics["sequenceLengthAfterExploration"] = _dominant_sequence_length(discovered)
+    diagnostics["lastSequenceGrowthStep"] = last_sequence_growth_step
     if stop_policy == "duration":
         diagnostics["autonomousStopReason"] = "duration_elapsed"
         diagnostics["stoppedBecauseSequenceStable"] = False
-    elif stable_rounds >= getattr(args, "sequence_stable_rounds", 6):
+    elif stop_policy == "sequence_stable" and stable_rounds >= getattr(
+        args, "sequence_stable_rounds", 6
+    ):
         diagnostics["autonomousStopReason"] = "sequence_stable"
         diagnostics["stoppedBecauseSequenceStable"] = True
-    elif step >= max_steps:
-        diagnostics["autonomousStopReason"] = "max_steps"
-    else:
-        diagnostics["autonomousStopReason"] = "duration"
+    elif stop_policy == "smart" and not diagnostics["smartStopTriggered"]:
+        if diagnostics["autonomousStopReason"] not in {"max_steps_reached"}:
+            diagnostics["autonomousStopReason"] = "duration_elapsed"
+        if diagnostics["smartStopReason"] == "none":
+            diagnostics["smartStopReason"] = diagnostics["autonomousStopReason"]
+        if diagnostics["largeSequenceModeTriggered"]:
+            diagnostics["largeSequenceStopReason"] = diagnostics["autonomousStopReason"]
+    elif diagnostics["autonomousStopReason"] == "none" and step >= max_steps:
+        diagnostics["autonomousStopReason"] = "max_steps_reached"
+    elif diagnostics["autonomousStopReason"] == "none":
+        diagnostics["autonomousStopReason"] = "duration_elapsed"
+    if diagnostics["largeSequenceModeTriggered"] and diagnostics["largeSequenceStopReason"] == "none":
+        diagnostics["largeSequenceStopReason"] = diagnostics["autonomousStopReason"]
     return diagnostics
+
+
+def _evaluate_smart_stop(
+    diagnostics: dict,
+    step: int,
+    stable_rounds: int,
+    current_sequence_length: int,
+    last_network_growth_step: int,
+) -> str | None:
+    if step < diagnostics["smartStopMinSteps"]:
+        return None
+    if current_sequence_length < diagnostics["smartStopMinSequenceLength"]:
+        return None
+    stable_threshold = (
+        diagnostics["largeSequenceStableRounds"]
+        if diagnostics["largeSequenceModeTriggered"]
+        else diagnostics["smartStopStableRounds"]
+    )
+    if stable_rounds < stable_threshold:
+        return None
+    if last_network_growth_step and step - last_network_growth_step < 2:
+        return None
+    if diagnostics["readerBoundarySuspected"]:
+        return "smart_reader_boundary"
+    return "smart_sequence_complete"
+
+
+def _should_enable_large_sequence_mode(
+    diagnostics: dict,
+    current_sequence_length: int,
+) -> bool:
+    return diagnostics["largeSequenceModeEnabled"] and (
+        current_sequence_length >= diagnostics["largeSequenceMinLength"]
+    )
+
+
+def _build_action_lookup(actions: list[tuple[str, object]]) -> dict[str, tuple[str, object]]:
+    lookup: dict[str, tuple[str, object]] = {}
+    for action_name, action in actions:
+        lookup.setdefault(action_name, (action_name, action))
+    return lookup
+
+
+def _choose_next_action(
+    actions: list[tuple[str, object]],
+    action_lookup: dict[str, tuple[str, object]],
+    step: int,
+    productive_action_counts: dict[str, int],
+    large_sequence_mode_triggered: bool,
+) -> tuple[str, object]:
+    if not large_sequence_mode_triggered or not productive_action_counts:
+        return actions[step % len(actions)]
+    ranked_actions = _sorted_productive_actions(productive_action_counts)
+    if step % 3 != 2:
+        return action_lookup[ranked_actions[0]]
+    fallback_actions = [
+        action_lookup[action_name]
+        for action_name in ranked_actions[:3]
+        if action_name in action_lookup
+    ]
+    if not fallback_actions:
+        return actions[step % len(actions)]
+    return fallback_actions[step % len(fallback_actions)]
+
+
+def _sorted_productive_actions(productive_action_counts: dict[str, int]) -> list[str]:
+    return [
+        action_name
+        for action_name, _ in sorted(
+            productive_action_counts.items(),
+            key=lambda item: (-item[1], item[0]),
+        )
+    ]
+
+
+def _current_step_wait_ms(args, large_sequence_mode_triggered: bool) -> int:
+    if large_sequence_mode_triggered:
+        return int(
+            getattr(
+                args,
+                "large_sequence_step_wait_ms",
+                getattr(args, "autonomous_step_wait_ms", 700),
+            )
+        )
+    return int(getattr(args, "autonomous_step_wait_ms", 700))
 
 
 def _build_autonomous_actions(args) -> list[tuple[str, object]]:
@@ -486,6 +695,37 @@ def _scroll_internal_containers(page) -> None:
     )
 
 
+def _detect_reader_boundary(page) -> bool:
+    try:
+        return bool(
+            page.evaluate(
+                """(terms) => {
+                    const isVisible = (element) => {
+                      const rect = element.getBoundingClientRect();
+                      const style = window.getComputedStyle(element);
+                      return rect.width > 80 && rect.height > 20 && style.visibility !== "hidden" && style.display !== "none";
+                    };
+                    const candidates = Array.from(document.querySelectorAll("section, div, aside, main, article"))
+                      .filter((element) => isVisible(element))
+                      .slice(0, 120);
+                    for (const element of candidates) {
+                      const markerText = `${element.id || ""} ${element.className || ""} ${element.getAttribute("aria-label") || ""} ${element.textContent || ""}`
+                        .trim()
+                        .toLowerCase()
+                        .slice(0, 400);
+                      if (terms.some((term) => markerText.includes(term))) {
+                        return true;
+                      }
+                    }
+                    return false;
+                }""",
+                list(READER_BOUNDARY_TERMS),
+            )
+        )
+    except TypeError:
+        return False
+
+
 def _default_autonomous_diagnostics(args, image_count_before_actions: int) -> dict:
     return {
         "autonomousModeEnabled": args.capture_mode == "autonomous"
@@ -508,6 +748,37 @@ def _default_autonomous_diagnostics(args, image_count_before_actions: int) -> di
         "sequenceLengthBeforeExploration": 0,
         "sequenceLengthAfterExploration": 0,
         "sequenceStableRounds": 0,
+        "smartStopEnabled": getattr(args, "stop_policy", "sequence_stable") == "smart",
+        "smartStopMinSteps": int(getattr(args, "smart_stop_min_steps", 20)),
+        "smartStopStableRounds": int(
+            getattr(args, "smart_stop_stable_rounds", 8)
+        ),
+        "smartStopMinSequenceLength": int(
+            getattr(args, "smart_stop_min_sequence_length", 3)
+        ),
+        "smartStopTriggered": False,
+        "smartStopReason": "none",
+        "readerBoundarySuspected": False,
+        "lastSequenceGrowthStep": 0,
+        "largeSequenceModeEnabled": _is_true(
+            getattr(args, "large_sequence_mode_enabled", "true")
+        ),
+        "largeSequenceModeTriggered": False,
+        "largeSequenceMinLength": int(
+            getattr(args, "large_sequence_min_length", 20)
+        ),
+        "largeSequenceMaxSteps": int(
+            getattr(args, "large_sequence_max_steps", 1000)
+        ),
+        "largeSequenceStableRounds": int(
+            getattr(args, "large_sequence_stable_rounds", 25)
+        ),
+        "largeSequenceStepsExecuted": 0,
+        "largeSequenceStopReason": "none",
+        "productiveActions": [],
+        "lastProductiveAction": "",
+        "sequenceGrowthEvents": 0,
+        "sequenceLengthAtNormalStepLimit": 0,
         "autonomousStopReason": "none",
         "stoppedBecauseSequenceStable": False,
         "blockedByOverlaySuspected": False,
@@ -522,6 +793,8 @@ def _capture_mode_note(capture_mode: str) -> str:
 
 
 def _stop_policy_note(stop_policy: str) -> str:
+    if stop_policy == "smart":
+        return "Smart stop used durationSeconds as maximum timeout and may finish earlier when the reader sequence looks complete."
     if stop_policy == "duration":
         return "Capture stayed open until requested duration elapsed."
     return "Capture stopped after the detected page sequence stabilized."

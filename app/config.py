@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -10,7 +11,12 @@ load_dotenv()
 SUPPORTED_URL_ACCESS_MODES = {"local_only", "allowlist", "open"}
 SUPPORTED_HTTP_SCHEMES = {"http", "https"}
 SUPPORTED_SSL_VERIFY_MODES = {"default", "truststore", "disabled"}
-SUPPORTED_CAPTURE_STOP_POLICIES = {"sequence_stable", "duration"}
+SUPPORTED_CAPTURE_STOP_POLICIES = {"sequence_stable", "duration", "smart"}
+SUPPORTED_BATCH_ANALYSIS_MODES = {
+    "static_preview",
+    "browser_preview",
+    "autonomous_capture",
+}
 
 
 @dataclass
@@ -49,6 +55,19 @@ class Settings:
     browser_carousel_exploration_enabled: bool
     browser_carousel_max_steps: int
     browser_sequence_stable_rounds: int
+    browser_smart_stop_min_steps: int
+    browser_smart_stop_stable_rounds: int
+    browser_smart_stop_min_sequence_length: int
+    browser_smart_stop_use_reader_boundary: bool
+    browser_large_sequence_mode_enabled: bool
+    browser_large_sequence_min_length: int
+    browser_large_sequence_max_steps: int
+    browser_large_sequence_step_wait_ms: int
+    browser_large_sequence_extend_while_growing: bool
+    browser_large_sequence_stable_rounds: int
+    batch_max_urls: int
+    batch_report_base_dir: str
+    batch_download_base_dir: str
 
 
 def _parse_allowed_hosts(raw_value: str) -> list[str]:
@@ -157,6 +176,46 @@ def get_settings() -> Settings:
     overlay_max_attempts_raw = os.getenv("BROWSER_OVERLAY_MAX_ATTEMPTS", "3").strip()
     carousel_max_steps_raw = os.getenv("BROWSER_CAROUSEL_MAX_STEPS", "80").strip()
     sequence_stable_rounds_raw = os.getenv("BROWSER_SEQUENCE_STABLE_ROUNDS", "6").strip()
+    smart_stop_min_steps_raw = os.getenv("BROWSER_SMART_STOP_MIN_STEPS", "20").strip()
+    smart_stop_stable_rounds_raw = os.getenv("BROWSER_SMART_STOP_STABLE_ROUNDS", "8").strip()
+    smart_stop_min_sequence_length_raw = os.getenv("BROWSER_SMART_STOP_MIN_SEQUENCE_LENGTH", "3").strip()
+    browser_smart_stop_use_reader_boundary = _parse_bool(
+        os.getenv("BROWSER_SMART_STOP_USE_READER_BOUNDARY", "true"),
+        True,
+    )
+    browser_large_sequence_mode_enabled = _parse_bool(
+        os.getenv("BROWSER_LARGE_SEQUENCE_MODE_ENABLED", "true"),
+        True,
+    )
+    large_sequence_min_length_raw = os.getenv(
+        "BROWSER_LARGE_SEQUENCE_MIN_LENGTH",
+        "20",
+    ).strip()
+    large_sequence_max_steps_raw = os.getenv(
+        "BROWSER_LARGE_SEQUENCE_MAX_STEPS",
+        "1000",
+    ).strip()
+    large_sequence_step_wait_ms_raw = os.getenv(
+        "BROWSER_LARGE_SEQUENCE_STEP_WAIT_MS",
+        "250",
+    ).strip()
+    browser_large_sequence_extend_while_growing = _parse_bool(
+        os.getenv("BROWSER_LARGE_SEQUENCE_EXTEND_WHILE_GROWING", "true"),
+        True,
+    )
+    large_sequence_stable_rounds_raw = os.getenv(
+        "BROWSER_LARGE_SEQUENCE_STABLE_ROUNDS",
+        "25",
+    ).strip()
+    batch_max_urls_raw = os.getenv("BATCH_MAX_URLS", "20").strip()
+    batch_report_base_dir = (
+        os.getenv("BATCH_REPORT_BASE_DIR", "downloads/batches").strip()
+        or "downloads/batches"
+    )
+    batch_download_base_dir = (
+        os.getenv("BATCH_DOWNLOAD_BASE_DIR", "").strip()
+        or str((Path(download_base_dir) / "batch-downloads").as_posix())
+    )
     try:
         browser_max_scroll_steps = int(max_scroll_steps_raw)
     except ValueError:
@@ -213,6 +272,40 @@ def get_settings() -> Settings:
         browser_sequence_stable_rounds = int(sequence_stable_rounds_raw)
     except ValueError:
         browser_sequence_stable_rounds = 6
+    try:
+        browser_smart_stop_min_steps = int(smart_stop_min_steps_raw)
+    except ValueError:
+        browser_smart_stop_min_steps = 20
+    try:
+        browser_smart_stop_stable_rounds = int(smart_stop_stable_rounds_raw)
+    except ValueError:
+        browser_smart_stop_stable_rounds = 8
+    try:
+        browser_smart_stop_min_sequence_length = int(
+            smart_stop_min_sequence_length_raw
+        )
+    except ValueError:
+        browser_smart_stop_min_sequence_length = 3
+    try:
+        browser_large_sequence_min_length = int(large_sequence_min_length_raw)
+    except ValueError:
+        browser_large_sequence_min_length = 20
+    try:
+        browser_large_sequence_max_steps = int(large_sequence_max_steps_raw)
+    except ValueError:
+        browser_large_sequence_max_steps = 1000
+    try:
+        browser_large_sequence_step_wait_ms = int(large_sequence_step_wait_ms_raw)
+    except ValueError:
+        browser_large_sequence_step_wait_ms = 250
+    try:
+        browser_large_sequence_stable_rounds = int(large_sequence_stable_rounds_raw)
+    except ValueError:
+        browser_large_sequence_stable_rounds = 25
+    try:
+        batch_max_urls = int(batch_max_urls_raw)
+    except ValueError:
+        batch_max_urls = 20
 
     if browser_max_scroll_steps < 0:
         browser_max_scroll_steps = 30
@@ -244,6 +337,22 @@ def get_settings() -> Settings:
         browser_carousel_max_steps = 80
     if browser_sequence_stable_rounds < 0:
         browser_sequence_stable_rounds = 6
+    if browser_smart_stop_min_steps < 0:
+        browser_smart_stop_min_steps = 20
+    if browser_smart_stop_stable_rounds < 0:
+        browser_smart_stop_stable_rounds = 8
+    if browser_smart_stop_min_sequence_length < 1:
+        browser_smart_stop_min_sequence_length = 3
+    if browser_large_sequence_min_length < 1:
+        browser_large_sequence_min_length = 20
+    if browser_large_sequence_max_steps < 1:
+        browser_large_sequence_max_steps = 1000
+    if browser_large_sequence_step_wait_ms < 0:
+        browser_large_sequence_step_wait_ms = 250
+    if browser_large_sequence_stable_rounds < 1:
+        browser_large_sequence_stable_rounds = 25
+    if batch_max_urls <= 0:
+        batch_max_urls = 20
 
     return Settings(
         url_access_mode=url_access_mode,
@@ -280,4 +389,17 @@ def get_settings() -> Settings:
         browser_carousel_exploration_enabled=browser_carousel_exploration_enabled,
         browser_carousel_max_steps=browser_carousel_max_steps,
         browser_sequence_stable_rounds=browser_sequence_stable_rounds,
+        browser_smart_stop_min_steps=browser_smart_stop_min_steps,
+        browser_smart_stop_stable_rounds=browser_smart_stop_stable_rounds,
+        browser_smart_stop_min_sequence_length=browser_smart_stop_min_sequence_length,
+        browser_smart_stop_use_reader_boundary=browser_smart_stop_use_reader_boundary,
+        browser_large_sequence_mode_enabled=browser_large_sequence_mode_enabled,
+        browser_large_sequence_min_length=browser_large_sequence_min_length,
+        browser_large_sequence_max_steps=browser_large_sequence_max_steps,
+        browser_large_sequence_step_wait_ms=browser_large_sequence_step_wait_ms,
+        browser_large_sequence_extend_while_growing=browser_large_sequence_extend_while_growing,
+        browser_large_sequence_stable_rounds=browser_large_sequence_stable_rounds,
+        batch_max_urls=batch_max_urls,
+        batch_report_base_dir=batch_report_base_dir,
+        batch_download_base_dir=batch_download_base_dir,
     )

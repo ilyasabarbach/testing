@@ -44,6 +44,86 @@
       </p>
     </section>
 
+    <section class="panel" id="batch-panel-shell">
+      <div class="section-header">
+        <div>
+          <h2>Batch Analysis</h2>
+          <p class="section-copy">
+            Run sequential batch jobs for multiple chapter URLs and monitor progress live.
+          </p>
+        </div>
+        <span class="badge badge-neutral">Queue Mode</span>
+      </div>
+
+      <label class="input-label" for="batch-urls">Batch URLs</label>
+      <textarea
+        id="batch-urls"
+        name="batch-urls"
+        rows="6"
+        placeholder="https://example.com/chapter-1&#10;https://example.com/chapter-2"
+      ></textarea>
+      <p class="hint">Enter one URL per line. Empty lines are ignored.</p>
+
+      <div class="batch-control-grid">
+        <label class="field-block" for="batch-analysis-mode">
+          <span>Analysis Mode</span>
+          <select id="batch-analysis-mode" name="batch-analysis-mode">
+            <option value="static_preview">Static Preview</option>
+            <option value="browser_preview">Browser Preview</option>
+            <option value="autonomous_capture" selected>Autonomous Capture</option>
+          </select>
+        </label>
+
+        <label class="field-block" for="batch-duration-seconds">
+          <span>Duration Seconds</span>
+          <select id="batch-duration-seconds" name="batch-duration-seconds">
+            <option value="30">30</option>
+            <option value="60">60</option>
+            <option value="90">90</option>
+            <option value="120">120</option>
+            <option value="180">180</option>
+            <option value="300">300</option>
+            <option value="600">600</option>
+            <option value="900" selected>900</option>
+          </select>
+        </label>
+
+        <label class="field-block" for="batch-stop-policy">
+          <span>Stop Policy</span>
+          <select id="batch-stop-policy" name="batch-stop-policy">
+            <option value="smart" selected>Smart Stop (recommended)</option>
+            <option value="duration">Duration Timeout</option>
+            <option value="sequence_stable">Sequence Stable</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="controls action-controls batch-action-row">
+        <button id="batch-demo-preset-button" type="button">Manager Demo / Long Chapter</button>
+        <button id="batch-run-button" type="button">Run Batch</button>
+      </div>
+      <p class="hint">
+        Batch UI calls existing backend queue endpoints: <code>POST /api/chapters/batch</code> and <code>GET /api/chapters/batch/{jobId}</code>.
+      </p>
+    </section>
+
+    <section id="runtime-config-panel" class="panel hidden" aria-live="polite">
+      <div class="section-header">
+        <div>
+          <h2>Runtime Demo Configuration</h2>
+          <p class="section-copy">
+            Manager-friendly summary of server startup settings used for long-chapter autonomous demos.
+          </p>
+        </div>
+        <span id="runtime-config-badge" class="badge badge-neutral">Checking...</span>
+      </div>
+      <div id="runtime-config-summary" class="summary-grid"></div>
+      <details class="config-details">
+        <summary>Advanced Runtime Values</summary>
+        <div id="runtime-config-details" class="summary-grid"></div>
+      </details>
+    </section>
+
     <section id="inspect-panel" class="panel hidden" aria-live="polite">
       <div class="section-header">
         <h2>Network Inspect</h2>
@@ -110,6 +190,97 @@
             </tr>
           </thead>
           <tbody id="download-table-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="batch-status-panel" class="panel hidden" aria-live="polite">
+      <div class="section-header">
+        <h2>Batch Dashboard</h2>
+        <span id="batch-loading" class="loading-indicator hidden">Polling batch status...</span>
+      </div>
+      <div id="batch-summary" class="summary-grid"></div>
+      <div id="batch-current-item" class="status-message hidden"></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Index</th>
+              <th>URL</th>
+              <th>Status</th>
+              <th>Image Count</th>
+              <th>Duration</th>
+              <th>Selected Count</th>
+              <th>Sequence Length</th>
+              <th>Numeric Ordering</th>
+              <th>Ordering Strategy</th>
+              <th>Error</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="batch-items-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="batch-download-panel" class="panel hidden" aria-live="polite">
+      <div class="section-header">
+        <div>
+          <h2>Batch Download</h2>
+          <p class="section-copy">
+            Download already detected batch result images without re-running analysis.
+          </p>
+        </div>
+        <span id="batch-download-loading" class="loading-indicator hidden">Downloading...</span>
+      </div>
+      <div class="controls action-controls single-action-row">
+        <button id="batch-download-button" type="button" disabled>Download All Detected Images</button>
+      </div>
+      <p class="hint">
+        Uses existing backend endpoint: <code>POST /api/chapters/batch/{jobId}/download</code>.
+      </p>
+      <div id="batch-download-summary" class="summary-grid hidden"></div>
+      <div class="table-wrap hidden" id="batch-download-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Index</th>
+              <th>Source URL</th>
+              <th>Folder</th>
+              <th>Image Count</th>
+              <th>Downloaded Images</th>
+              <th>Failed Images</th>
+              <th>Error</th>
+            </tr>
+          </thead>
+          <tbody id="batch-download-items-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="batch-details-panel" class="panel hidden" aria-live="polite">
+      <div class="section-header">
+        <div>
+          <h2>Batch Item Details</h2>
+          <p id="batch-details-title" class="section-copy"></p>
+        </div>
+      </div>
+      <div id="batch-details-summary" class="summary-grid"></div>
+      <div id="batch-details-notes" class="diagnostic-block hidden">
+        <h3>Notes</h3>
+        <div id="batch-details-notes-body"></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Index</th>
+              <th>Image URL</th>
+              <th>Filename</th>
+              <th>Source</th>
+            </tr>
+          </thead>
+          <tbody id="batch-details-images-body"></tbody>
         </table>
       </div>
     </section>

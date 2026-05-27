@@ -64,6 +64,16 @@ async def capture_chapter_images(
         carousel_exploration_enabled=settings.browser_carousel_exploration_enabled,
         carousel_max_steps=settings.browser_carousel_max_steps,
         sequence_stable_rounds=settings.browser_sequence_stable_rounds,
+        smart_stop_min_steps=settings.browser_smart_stop_min_steps,
+        smart_stop_stable_rounds=settings.browser_smart_stop_stable_rounds,
+        smart_stop_min_sequence_length=settings.browser_smart_stop_min_sequence_length,
+        smart_stop_use_reader_boundary=settings.browser_smart_stop_use_reader_boundary,
+        large_sequence_mode_enabled=settings.browser_large_sequence_mode_enabled,
+        large_sequence_min_length=settings.browser_large_sequence_min_length,
+        large_sequence_max_steps=settings.browser_large_sequence_max_steps,
+        large_sequence_step_wait_ms=settings.browser_large_sequence_step_wait_ms,
+        large_sequence_extend_while_growing=settings.browser_large_sequence_extend_while_growing,
+        large_sequence_stable_rounds=settings.browser_large_sequence_stable_rounds,
     )
     payload = await asyncio.to_thread(
         run_capture_worker,
@@ -153,6 +163,38 @@ async def capture_chapter_images(
                 payload.get("sequenceLengthAfterExploration", 0)
             ),
             sequenceStableRounds=int(payload.get("sequenceStableRounds", 0)),
+            smartStopEnabled=bool(payload.get("smartStopEnabled", False)),
+            smartStopMinSteps=int(payload.get("smartStopMinSteps", 0)),
+            smartStopStableRounds=int(payload.get("smartStopStableRounds", 0)),
+            smartStopMinSequenceLength=int(
+                payload.get("smartStopMinSequenceLength", 0)
+            ),
+            smartStopTriggered=bool(payload.get("smartStopTriggered", False)),
+            smartStopReason=str(payload.get("smartStopReason", "none")),
+            readerBoundarySuspected=bool(
+                payload.get("readerBoundarySuspected", False)
+            ),
+            lastSequenceGrowthStep=int(payload.get("lastSequenceGrowthStep", 0)),
+            largeSequenceModeEnabled=bool(
+                payload.get("largeSequenceModeEnabled", False)
+            ),
+            largeSequenceModeTriggered=bool(
+                payload.get("largeSequenceModeTriggered", False)
+            ),
+            largeSequenceMinLength=int(payload.get("largeSequenceMinLength", 0)),
+            largeSequenceMaxSteps=int(payload.get("largeSequenceMaxSteps", 0)),
+            largeSequenceStepsExecuted=int(
+                payload.get("largeSequenceStepsExecuted", 0)
+            ),
+            largeSequenceStopReason=str(
+                payload.get("largeSequenceStopReason", "none")
+            ),
+            productiveActions=list(payload.get("productiveActions", [])),
+            lastProductiveAction=str(payload.get("lastProductiveAction", "")),
+            sequenceGrowthEvents=int(payload.get("sequenceGrowthEvents", 0)),
+            sequenceLengthAtNormalStepLimit=int(
+                payload.get("sequenceLengthAtNormalStepLimit", 0)
+            ),
             autonomousStopReason=str(payload.get("autonomousStopReason", "none")),
             blockedByOverlaySuspected=bool(payload.get("blockedByOverlaySuspected", False)),
             manualInteractionExpected=capture_mode == "assisted",
@@ -321,6 +363,16 @@ def build_capture_worker_command(
     carousel_exploration_enabled: bool,
     carousel_max_steps: int,
     sequence_stable_rounds: int,
+    smart_stop_min_steps: int,
+    smart_stop_stable_rounds: int,
+    smart_stop_min_sequence_length: int,
+    smart_stop_use_reader_boundary: bool,
+    large_sequence_mode_enabled: bool,
+    large_sequence_min_length: int,
+    large_sequence_max_steps: int,
+    large_sequence_step_wait_ms: int,
+    large_sequence_extend_while_growing: bool,
+    large_sequence_stable_rounds: int,
 ) -> list[str]:
     if browser_executable_path:
         executable_path = Path(browser_executable_path)
@@ -369,6 +421,26 @@ def build_capture_worker_command(
         str(carousel_max_steps),
         "--sequence-stable-rounds",
         str(sequence_stable_rounds),
+        "--smart-stop-min-steps",
+        str(smart_stop_min_steps),
+        "--smart-stop-stable-rounds",
+        str(smart_stop_stable_rounds),
+        "--smart-stop-min-sequence-length",
+        str(smart_stop_min_sequence_length),
+        "--smart-stop-use-reader-boundary",
+        "true" if smart_stop_use_reader_boundary else "false",
+        "--large-sequence-mode-enabled",
+        "true" if large_sequence_mode_enabled else "false",
+        "--large-sequence-min-length",
+        str(large_sequence_min_length),
+        "--large-sequence-max-steps",
+        str(large_sequence_max_steps),
+        "--large-sequence-step-wait-ms",
+        str(large_sequence_step_wait_ms),
+        "--large-sequence-extend-while-growing",
+        "true" if large_sequence_extend_while_growing else "false",
+        "--large-sequence-stable-rounds",
+        str(large_sequence_stable_rounds),
     ]
     if browser_executable_path:
         command.extend(["--browser-executable-path", browser_executable_path])

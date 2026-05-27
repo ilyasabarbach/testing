@@ -179,7 +179,7 @@ def build_browser_worker_command(
 
     if browser_channel:
         command.extend(["--browser-channel", browser_channel])
-    if user_data_dir:
+    if persistent_context_enabled and user_data_dir:
         command.extend(["--user-data-dir", user_data_dir])
 
     return command

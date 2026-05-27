@@ -72,7 +72,7 @@ class ChapterCaptureRequest(BaseModel):
     url: str
     durationSeconds: int = 30
     captureMode: Literal["assisted", "autonomous"] = "assisted"
-    stopPolicy: Literal["sequence_stable", "duration"] | None = None
+    stopPolicy: Literal["sequence_stable", "duration", "smart"] | None = None
 
 
 class ChapterCaptureImage(BaseModel):
@@ -92,7 +92,7 @@ class ChapterCaptureDiagnostics(BaseModel):
     browserPersistentContextEnabled: bool
     browserUserDataDirConfigured: bool
     browserSessionMode: Literal["ephemeral", "persistent"]
-    captureStopPolicy: Literal["sequence_stable", "duration"]
+    captureStopPolicy: Literal["sequence_stable", "duration", "smart"]
     captureRequestedDurationSeconds: int
     captureActualDurationSeconds: float
     stoppedBecauseSequenceStable: bool
@@ -122,6 +122,24 @@ class ChapterCaptureDiagnostics(BaseModel):
     sequenceLengthBeforeExploration: int
     sequenceLengthAfterExploration: int
     sequenceStableRounds: int
+    smartStopEnabled: bool
+    smartStopMinSteps: int
+    smartStopStableRounds: int
+    smartStopMinSequenceLength: int
+    smartStopTriggered: bool
+    smartStopReason: str
+    readerBoundarySuspected: bool
+    lastSequenceGrowthStep: int
+    largeSequenceModeEnabled: bool
+    largeSequenceModeTriggered: bool
+    largeSequenceMinLength: int
+    largeSequenceMaxSteps: int
+    largeSequenceStepsExecuted: int
+    largeSequenceStopReason: str
+    productiveActions: list[str]
+    lastProductiveAction: str
+    sequenceGrowthEvents: int
+    sequenceLengthAtNormalStepLimit: int
     autonomousStopReason: str
     blockedByOverlaySuspected: bool
     manualInteractionExpected: bool
@@ -134,6 +152,102 @@ class ChapterCaptureResponse(BaseModel):
     imageCount: int
     images: list[ChapterCaptureImage]
     diagnostics: ChapterCaptureDiagnostics
+
+
+class ChapterBatchRequest(BaseModel):
+    urls: list[str]
+    analysisMode: Literal[
+        "static_preview",
+        "browser_preview",
+        "autonomous_capture",
+    ] = "autonomous_capture"
+    durationSeconds: int | None = None
+    stopPolicy: Literal["sequence_stable", "duration", "smart"] | None = None
+
+
+class ChapterBatchCreateResponse(BaseModel):
+    jobId: str
+    status: Literal["queued", "running", "completed", "completed_with_errors", "failed"]
+    totalUrls: int
+    completedUrls: int
+    failedUrls: int
+    createdAt: str
+    statusUrl: str
+
+
+class ChapterBatchItemStatus(BaseModel):
+    index: int
+    url: str
+    status: Literal["pending", "running", "success", "failed"]
+    imageCount: int
+    startedAt: str | None
+    finishedAt: str | None
+    durationMs: int | None
+    error: str | None
+    result: dict | None
+
+
+class ChapterBatchStatusResponse(BaseModel):
+    jobId: str
+    status: Literal["queued", "running", "completed", "completed_with_errors", "failed"]
+    analysisMode: Literal[
+        "static_preview",
+        "browser_preview",
+        "autonomous_capture",
+    ]
+    totalUrls: int
+    completedUrls: int
+    failedUrls: int
+    createdAt: str
+    startedAt: str | None
+    finishedAt: str | None
+    durationMs: int | None
+    items: list[ChapterBatchItemStatus]
+    reportPath: str
+
+
+class ChapterBatchDownloadItemResponse(BaseModel):
+    index: int
+    url: str
+    folder: str
+    imageCount: int
+    downloadedImages: int
+    failedImages: int
+    error: str | None
+
+
+class ChapterBatchDownloadResponse(BaseModel):
+    jobId: str
+    status: Literal["completed", "completed_with_errors"]
+    downloadBaseDirectory: str
+    successfulItems: int
+    failedItems: int
+    totalImages: int
+    downloadedImages: int
+    failedImages: int
+    items: list[ChapterBatchDownloadItemResponse]
+    reportPath: str
+
+
+class RuntimeConfigResponse(BaseModel):
+    urlAccessMode: str
+    browserHeadless: bool
+    browserPersistentContextEnabled: bool
+    browserUserDataDirConfigured: bool
+    browserCaptureMaxSeconds: int
+    browserAutonomousMaxSteps: int
+    browserAutonomousStepWaitMs: int
+    browserSmartStopMinSteps: int
+    browserSmartStopStableRounds: int
+    browserLargeSequenceModeEnabled: bool
+    browserLargeSequenceMinLength: int
+    browserLargeSequenceMaxSteps: int
+    browserLargeSequenceStepWaitMs: int
+    browserLargeSequenceExtendWhileGrowing: bool
+    browserLargeSequenceStableRounds: int
+    batchMaxUrls: int
+    batchReportBaseDir: str
+    batchDownloadBaseDir: str
 
 
 class ChapterDownloadImageResult(BaseModel):

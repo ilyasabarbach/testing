@@ -66,6 +66,16 @@ BROWSER_SCROLL_DELTA_PX=1000
 BROWSER_CAPTURE_DEFAULT_SECONDS=30
 BROWSER_CAPTURE_MAX_SECONDS=120
 BROWSER_CAPTURE_STOP_POLICY=sequence_stable
+BROWSER_SMART_STOP_MIN_STEPS=20
+BROWSER_SMART_STOP_STABLE_ROUNDS=8
+BROWSER_SMART_STOP_MIN_SEQUENCE_LENGTH=3
+BROWSER_SMART_STOP_USE_READER_BOUNDARY=true
+BROWSER_LARGE_SEQUENCE_MODE_ENABLED=true
+BROWSER_LARGE_SEQUENCE_MIN_LENGTH=20
+BROWSER_LARGE_SEQUENCE_MAX_STEPS=1000
+BROWSER_LARGE_SEQUENCE_STEP_WAIT_MS=250
+BROWSER_LARGE_SEQUENCE_EXTEND_WHILE_GROWING=true
+BROWSER_LARGE_SEQUENCE_STABLE_ROUNDS=25
 BROWSER_AUTONOMOUS_CAPTURE_ENABLED=true
 BROWSER_AUTONOMOUS_MAX_STEPS=60
 BROWSER_AUTONOMOUS_STEP_WAIT_MS=700
@@ -78,6 +88,9 @@ BROWSER_OVERLAY_MAX_ATTEMPTS=3
 BROWSER_CAROUSEL_EXPLORATION_ENABLED=true
 BROWSER_CAROUSEL_MAX_STEPS=80
 BROWSER_SEQUENCE_STABLE_ROUNDS=6
+BATCH_MAX_URLS=20
+BATCH_REPORT_BASE_DIR=downloads/batches
+BATCH_DOWNLOAD_BASE_DIR=downloads/batch-downloads
 ```
 
 Project includes [.env.example](C:/Users/ilyas.abarbach/Documents/testing/.env.example:1) with safe defaults.
@@ -105,7 +118,17 @@ Project includes [.env.example](C:/Users/ilyas.abarbach/Documents/testing/.env.e
 - `BROWSER_SCROLL_DELTA_PX`: generic scroll delta used for window and container scrolling
 - `BROWSER_CAPTURE_DEFAULT_SECONDS`: default assisted capture duration
 - `BROWSER_CAPTURE_MAX_SECONDS`: maximum assisted capture duration
-- `BROWSER_CAPTURE_STOP_POLICY`: default capture stop policy, `sequence_stable` or `duration`
+- `BROWSER_CAPTURE_STOP_POLICY`: default capture stop policy, `sequence_stable`, `duration`, or `smart`
+- `BROWSER_SMART_STOP_MIN_STEPS`: minimum autonomous exploration steps before smart stop can finish early
+- `BROWSER_SMART_STOP_STABLE_ROUNDS`: stable dominant-sequence rounds required by smart stop
+- `BROWSER_SMART_STOP_MIN_SEQUENCE_LENGTH`: minimum dominant sequence length before smart stop can trigger
+- `BROWSER_SMART_STOP_USE_READER_BOUNDARY`: allow generic comment/discussion/reviews boundary hints to end smart mode faster
+- `BROWSER_LARGE_SEQUENCE_MODE_ENABLED`: enable adaptive long-chapter exploration mode
+- `BROWSER_LARGE_SEQUENCE_MIN_LENGTH`: dominant sequence length that turns on large sequence mode
+- `BROWSER_LARGE_SEQUENCE_MAX_STEPS`: hard step cap for large sequence mode
+- `BROWSER_LARGE_SEQUENCE_STEP_WAIT_MS`: shorter wait used during large sequence exploration
+- `BROWSER_LARGE_SEQUENCE_EXTEND_WHILE_GROWING`: keep exploring past normal step limit while sequence still grows
+- `BROWSER_LARGE_SEQUENCE_STABLE_ROUNDS`: stable rounds required before large sequence smart stop finishes
 - `BROWSER_AUTONOMOUS_CAPTURE_ENABLED`: enable autonomous generic capture strategy
 - `BROWSER_AUTONOMOUS_MAX_STEPS`: maximum autonomous exploration actions
 - `BROWSER_AUTONOMOUS_STEP_WAIT_MS`: wait after each autonomous action
@@ -118,6 +141,9 @@ Project includes [.env.example](C:/Users/ilyas.abarbach/Documents/testing/.env.e
 - `BROWSER_CAROUSEL_EXPLORATION_ENABLED`: enable carousel-style repeated navigation actions
 - `BROWSER_CAROUSEL_MAX_STEPS`: maximum carousel-style exploration steps
 - `BROWSER_SEQUENCE_STABLE_ROUNDS`: stop after dominant sequence length stays stable this many rounds
+- `BATCH_MAX_URLS`: maximum URLs accepted by one batch job request
+- `BATCH_REPORT_BASE_DIR`: base directory for persisted batch job reports
+- `BATCH_DOWNLOAD_BASE_DIR`: base directory for downloading images from successful batch item results
 
 ### URL access modes
 
@@ -430,6 +456,7 @@ Capture modes:
 Stop policies:
 - `sequence_stable`: default; autonomous capture may stop early after detected page sequence stabilizes
 - `duration`: autonomous capture stays open until requested duration elapses, useful when virtual readers load slowly or need more time for generic actions
+- `smart`: recommended for demos; uses `durationSeconds` as maximum timeout and may stop earlier when dominant reader sequence looks complete
 
 Autonomous actions may include:
 - window scroll
@@ -458,6 +485,64 @@ Persistent capture profile:
 - if persistent mode is enabled without user data dir, API returns `Persistent browser context requires BROWSER_USER_DATA_DIR.`
 
 Use capture when browser preview sees only first virtual slides and more images load only after reader interaction. Autonomous mode is generic exploration, not site-specific automation.
+Smart stop can finish before full timeout when dominant numeric sequence stops growing after enough exploration. It may also stop earlier when a generic comments/discussion/reviews boundary is detected after a stable sequence. It remains heuristic and does not guarantee perfect chapter-end detection on every site.
+Large sequence mode helps long chapters continue beyond the normal action budget when the dominant numeric sequence is already large and still growing. It also prioritizes actions that recently increased sequence length. Long chapters may still require higher `durationSeconds` values when pages load slowly.
+
+### Batch processing endpoints
+
+`POST /api/chapters/batch`
+
+Creates in-memory sequential batch job for multiple authorized/testing URLs and returns immediately with job metadata plus status URL.
+
+Request body:
+
+```json
+{
+  "urls": [
+    "https://example.com/chapter-1",
+    "https://example.com/chapter-2"
+  ],
+  "analysisMode": "autonomous_capture",
+  "durationSeconds": 120,
+  "stopPolicy": "duration"
+}
+```
+
+Supported `analysisMode` values:
+- `static_preview`: reuse static preview pipeline with `renderMode="static"`
+- `browser_preview`: reuse browser preview pipeline with `renderMode="browser"`
+- `autonomous_capture`: reuse autonomous capture pipeline with `captureMode="autonomous"`
+
+Batch stop policies follow capture stop policies, including `smart` for demo-friendly autonomous runs.
+
+`GET /api/chapters/batch/{jobId}`
+
+Returns current job state, per-URL item status, and persisted report path.
+
+Batch behavior:
+- processing is sequential only, concurrency fixed to `1` for stability
+- one item failure does not stop remaining URLs
+- reports are written under `downloads/batches/<jobId>/batch-report.json` by default
+- feature is intended for authorized/internal/testing URLs
+
+Batch download:
+- `POST /api/chapters/batch/{jobId}/download` downloads images from successful batch item results without re-running preview or capture
+- optional `POST /api/chapters/batch/{jobId}/items/{index}/download` downloads one successful batch item only
+- source images come from stored `item.result.images`
+- base directory defaults to `downloads/batch-downloads`
+- generic URL folder inference tries to build title/chapter folders from slug-like path segments, sanitizes Windows-invalid characters, and falls back to safe host/path names
+- decimal chapter numbers are preserved in inferred folder names, for example `Chapter 184.5`
+- existing ordered filenames like `001.webp` and `002.webp` are preserved
+- batch download persists `batch-download-report.json`
+
+Current limitations:
+- job registry is in memory only
+- jobs are lost on server restart
+- no batch UI yet
+- folder inference is heuristic and may fall back to generic names on unusual URLs
+
+Repository hygiene:
+- `.gitignore` ignores generated downloads, browser profiles, cache files, logs, and local env files
 
 ### Persistent report
 
@@ -520,6 +605,7 @@ Root page `GET /` serves lightweight professional interface for:
 - triggering ordered download
 - inspecting download execution report
 - viewing API errors clearly
+- running batch analysis from browser dashboard
 
 Inspect flow:
 - enter URL
@@ -540,9 +626,39 @@ Download flow:
 - UI calls `POST /api/chapters/download`
 - UI shows run metadata, download directory, success/failure counts, and per-image results
 
+Batch UI flow:
+- open `Batch Analysis` section
+- enter one URL per line
+- choose `Static Preview`, `Browser Preview`, or `Autonomous Capture`
+- autonomous-focused controls include `durationSeconds` up to `900` and `stopPolicy` including `smart`
+- use `Manager Demo / Long Chapter` preset to set `autonomous_capture` + `900` + `smart`
+- click `Run Batch`
+- UI calls `POST /api/chapters/batch`
+- UI polls `GET /api/chapters/batch/{jobId}` while status is `queued` or `running`
+- UI shows job progress, report path, per-item status, and item image/details view
+- after a completed batch with successful detected images, click `Download All Detected Images`
+- UI calls `POST /api/chapters/batch/{jobId}/download`
+- UI downloads already detected batch results only and does not re-run capture
+- UI shows download base directory, generated folder paths, image totals, failure counts, and `batch-download-report.json`
+
+Batch UI notes:
+- default batch mode is `autonomous_capture`
+- default batch duration is `900` for manager demo flow
+- default batch stop policy is `smart`
+- batch processing is still sequential
+- autonomous capture may take up to `durationSeconds` per URL
+- use only for authorized/internal/testing URLs
+
+Runtime Demo Configuration panel:
+- UI reads safe server startup settings from `GET /api/runtime/config`
+- panel shows manager-friendly demo readiness status with `Demo Ready` or `Demo Config Incomplete`
+- these values are server-startup env vars, not browser-side settings
+- recommended demo-oriented values include persistent browser profile enabled, large sequence mode enabled, capture max seconds at least `900`, and large sequence max steps at least `2000`
+
 Loading states:
 - `Previewing...`
 - `Downloading...`
+- `Polling batch status...`
 
 ### Preview diagnostics
 

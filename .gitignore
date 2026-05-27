@@ -1,0 +1,120 @@
+# -------------------------
+# Python cache / bytecode
+# -------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# -------------------------
+# Virtual environments
+# -------------------------
+.venv/
+venv/
+env/
+ENV/
+
+# -------------------------
+# Environment / local config
+# -------------------------
+.env
+.env.local
+.env.*.local
+
+# Keep examples
+!.env.example
+
+# -------------------------
+# Generated downloads / reports
+# -------------------------
+downloads/
+batch-downloads/
+chapter-downloads/
+output/
+reports/
+
+# -------------------------
+# Browser profiles / Playwright local state
+# -------------------------
+.browser-profile*/
+.browser-profile-demo-*/
+playwright-report/
+test-results/
+
+# -------------------------
+# Logs
+# -------------------------
+*.log
+uvicorn-debug.log
+debug.log
+
+# -------------------------
+# Local helper/runtime files
+# -------------------------
+*.tmp
+*.temp
+*.bak
+
+# -------------------------
+# OS files
+# -------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# -------------------------
+# IDE / editor files
+# -------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# -------------------------
+# Packaging/build artifacts
+# -------------------------
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# -------------------------
+# Node / frontend dependencies if added later
+# -------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+# Local browser profiles / generated runtime data
+.browser-profile*/
+.browser-profile-demo-1/
+.browser-profile/
+.testing/
+
+# Generated outputs
+downloads/
+uvicorn-debug.log
+*.log
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local env files
+.env
+.env.local
+
+# OS / accidental files
+.DS_Store
+Thumbs.db
+$null

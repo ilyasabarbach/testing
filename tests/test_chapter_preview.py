@@ -5,6 +5,7 @@ from pathlib import Path
 import ssl
 import subprocess
 import sys
+import time
 from types import SimpleNamespace
 
 from app.main import app
@@ -13,6 +14,17 @@ from app.services.http_client import TargetFetchError
 
 
 client = TestClient(app)
+
+
+def _wait_for_batch_completion(job_id: str, timeout_seconds: float = 2.0) -> dict:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        response = client.get(f"/api/chapters/batch/{job_id}")
+        payload = response.json()
+        if payload["status"] in {"completed", "completed_with_errors", "failed"}:
+            return payload
+        time.sleep(0.02)
+    raise AssertionError(f"Batch job {job_id} did not finish in time.")
 
 
 def test_dotenv_example_exists() -> None:
@@ -117,6 +129,28 @@ def test_config_reads_browser_persistent_context_enabled_from_env(monkeypatch) -
     assert settings.browser_persistent_context_enabled is True
 
 
+def test_batch_config_defaults(monkeypatch) -> None:
+    monkeypatch.delenv("BATCH_MAX_URLS", raising=False)
+    monkeypatch.delenv("BATCH_REPORT_BASE_DIR", raising=False)
+
+    settings = get_settings()
+
+    assert settings.batch_max_urls == 20
+    assert settings.batch_report_base_dir == "downloads/batches"
+
+
+def test_config_reads_batch_values_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("BATCH_MAX_URLS", "7")
+    monkeypatch.setenv("BATCH_REPORT_BASE_DIR", "tmp/batches")
+    monkeypatch.setenv("BATCH_DOWNLOAD_BASE_DIR", "tmp/batch-downloads")
+
+    settings = get_settings()
+
+    assert settings.batch_max_urls == 7
+    assert settings.batch_report_base_dir == "tmp/batches"
+    assert settings.batch_download_base_dir == "tmp/batch-downloads"
+
+
 def test_browser_scroll_config_defaults(monkeypatch) -> None:
     monkeypatch.delenv("BROWSER_SCROLL_ENABLED", raising=False)
     monkeypatch.delenv("BROWSER_MAX_SCROLL_STEPS", raising=False)
@@ -173,6 +207,14 @@ def test_config_reads_capture_stop_policy_from_env(monkeypatch) -> None:
     assert settings.browser_capture_stop_policy == "duration"
 
 
+def test_config_reads_smart_capture_stop_policy_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("BROWSER_CAPTURE_STOP_POLICY", "smart")
+
+    settings = get_settings()
+
+    assert settings.browser_capture_stop_policy == "smart"
+
+
 def test_autonomous_capture_config_defaults(monkeypatch) -> None:
     monkeypatch.delenv("BROWSER_AUTONOMOUS_CAPTURE_ENABLED", raising=False)
     monkeypatch.delenv("BROWSER_AUTONOMOUS_MAX_STEPS", raising=False)
@@ -225,6 +267,16 @@ def test_reader_readiness_config_defaults(monkeypatch) -> None:
     assert settings.browser_carousel_exploration_enabled is True
     assert settings.browser_carousel_max_steps == 80
     assert settings.browser_sequence_stable_rounds == 6
+    assert settings.browser_smart_stop_min_steps == 20
+    assert settings.browser_smart_stop_stable_rounds == 8
+    assert settings.browser_smart_stop_min_sequence_length == 3
+    assert settings.browser_smart_stop_use_reader_boundary is True
+    assert settings.browser_large_sequence_mode_enabled is True
+    assert settings.browser_large_sequence_min_length == 20
+    assert settings.browser_large_sequence_max_steps == 1000
+    assert settings.browser_large_sequence_step_wait_ms == 250
+    assert settings.browser_large_sequence_extend_while_growing is True
+    assert settings.browser_large_sequence_stable_rounds == 25
 
 
 def test_config_reads_reader_readiness_values_from_env(monkeypatch) -> None:
@@ -234,6 +286,16 @@ def test_config_reads_reader_readiness_values_from_env(monkeypatch) -> None:
     monkeypatch.setenv("BROWSER_CAROUSEL_EXPLORATION_ENABLED", "false")
     monkeypatch.setenv("BROWSER_CAROUSEL_MAX_STEPS", "22")
     monkeypatch.setenv("BROWSER_SEQUENCE_STABLE_ROUNDS", "4")
+    monkeypatch.setenv("BROWSER_SMART_STOP_MIN_STEPS", "9")
+    monkeypatch.setenv("BROWSER_SMART_STOP_STABLE_ROUNDS", "3")
+    monkeypatch.setenv("BROWSER_SMART_STOP_MIN_SEQUENCE_LENGTH", "5")
+    monkeypatch.setenv("BROWSER_SMART_STOP_USE_READER_BOUNDARY", "false")
+    monkeypatch.setenv("BROWSER_LARGE_SEQUENCE_MODE_ENABLED", "false")
+    monkeypatch.setenv("BROWSER_LARGE_SEQUENCE_MIN_LENGTH", "12")
+    monkeypatch.setenv("BROWSER_LARGE_SEQUENCE_MAX_STEPS", "333")
+    monkeypatch.setenv("BROWSER_LARGE_SEQUENCE_STEP_WAIT_MS", "111")
+    monkeypatch.setenv("BROWSER_LARGE_SEQUENCE_EXTEND_WHILE_GROWING", "false")
+    monkeypatch.setenv("BROWSER_LARGE_SEQUENCE_STABLE_ROUNDS", "14")
 
     settings = get_settings()
 
@@ -243,6 +305,16 @@ def test_config_reads_reader_readiness_values_from_env(monkeypatch) -> None:
     assert settings.browser_carousel_exploration_enabled is False
     assert settings.browser_carousel_max_steps == 22
     assert settings.browser_sequence_stable_rounds == 4
+    assert settings.browser_smart_stop_min_steps == 9
+    assert settings.browser_smart_stop_stable_rounds == 3
+    assert settings.browser_smart_stop_min_sequence_length == 5
+    assert settings.browser_smart_stop_use_reader_boundary is False
+    assert settings.browser_large_sequence_mode_enabled is False
+    assert settings.browser_large_sequence_min_length == 12
+    assert settings.browser_large_sequence_max_steps == 333
+    assert settings.browser_large_sequence_step_wait_ms == 111
+    assert settings.browser_large_sequence_extend_while_growing is False
+    assert settings.browser_large_sequence_stable_rounds == 14
 
 
 def test_root_ui_returns_200() -> None:
@@ -259,6 +331,86 @@ def test_root_ui_contains_project_title() -> None:
     assert 'id="inspect-button"' in response.text
     assert 'id="follow-redirects"' in response.text
     assert 'id="preview-diagnostics"' in response.text
+    assert "Batch Analysis" in response.text
+    assert 'id="batch-urls"' in response.text
+    assert 'id="batch-run-button"' in response.text
+    assert 'id="batch-analysis-mode"' in response.text
+    assert 'id="batch-duration-seconds"' in response.text
+    assert 'id="batch-stop-policy"' in response.text
+    assert 'value="900"' in response.text
+    assert 'value="smart"' in response.text
+    assert 'value="static_preview"' in response.text
+    assert 'value="browser_preview"' in response.text
+    assert 'value="autonomous_capture"' in response.text
+    assert "Manager Demo / Long Chapter" in response.text
+    assert "Runtime Demo Configuration" in response.text
+    assert "Download All Detected Images" in response.text
+    assert 'id="batch-download-button"' in response.text
+
+
+def test_batch_ui_javascript_contains_batch_endpoint_calls() -> None:
+    response = client.get("/static/app.js")
+
+    assert response.status_code == 200
+    assert 'callJsonApi("/api/chapters/batch", payload)' in response.text
+    assert 'const fallbackStatusUrl = `/api/chapters/batch/${state.batchJobId}`;' in response.text
+    assert "statusUrl: job.statusUrl" in response.text or "state.batchStatusUrl" in response.text
+    assert "urls," in response.text
+    assert "analysisMode: batchAnalysisModeInput.value" in response.text
+    assert "durationSeconds: Number(batchDurationSecondsInput.value)" in response.text
+    assert "stopPolicy: batchStopPolicyInput.value" in response.text
+    assert 'const config = await fetchJson("/api/runtime/config");' in response.text
+    assert 'callJsonApi(`/api/chapters/batch/${jobId}/download`, {})' in response.text
+    assert 'callJsonApi(\n      `/api/chapters/batch/${jobId}/items/${itemIndex}/download`,' in response.text
+    assert "batchDownloadButton.disabled = !ready" in response.text
+    assert 'batchDownloadButton.textContent = state.batchDownloadIsRunning' in response.text
+    assert 'batchAnalysisModeInput.value = "autonomous_capture";' in response.text
+    assert 'batchDurationSecondsInput.value = "900";' in response.text
+    assert 'batchStopPolicyInput.value = "smart";' in response.text
+    assert 'batchStopPolicyInput.value = getBatchStopPolicyDefault(mode);' in response.text
+
+
+def test_batch_ui_javascript_contains_batch_diagnostic_labels() -> None:
+    response = client.get("/static/app.js")
+
+    assert response.status_code == 200
+    assert "Selected Image Count" in response.text
+    assert "Dominant Sequence Length" in response.text
+    assert "Numeric Ordering Applied" in response.text
+    assert "Ordering Strategy" in response.text
+    assert "Action Count" in response.text
+    assert "autonomousActionsUsed.length" in response.text
+    assert "Download Base Directory" in response.text
+    assert "Downloaded Images" in response.text
+    assert "Failed Images" in response.text
+    assert "Report Path" in response.text
+    assert "item.folder ??" in response.text
+    assert "Demo Ready" in response.text
+    assert "Demo Config Incomplete" in response.text
+    assert "Persistent Profile" in response.text
+    assert "Large Sequence Mode" in response.text
+    assert "Large Sequence Max Steps" in response.text
+
+
+def test_runtime_config_endpoint_exists_and_excludes_secrets(monkeypatch) -> None:
+    monkeypatch.setenv("URL_ACCESS_MODE", "open")
+    monkeypatch.setenv("BROWSER_PERSISTENT_CONTEXT_ENABLED", "true")
+    monkeypatch.setenv("BROWSER_USER_DATA_DIR", r"C:\temp\profile-demo")
+    monkeypatch.setenv("BROWSER_CAPTURE_MAX_SECONDS", "900")
+    monkeypatch.setenv("BROWSER_LARGE_SEQUENCE_MODE_ENABLED", "true")
+    monkeypatch.setenv("BROWSER_LARGE_SEQUENCE_MAX_STEPS", "2000")
+    monkeypatch.setenv("BATCH_DOWNLOAD_BASE_DIR", "downloads/batch-downloads")
+
+    response = client.get("/api/runtime/config")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["browserPersistentContextEnabled"] is True
+    assert payload["browserUserDataDirConfigured"] is True
+    assert payload["browserLargeSequenceModeEnabled"] is True
+    assert payload["browserLargeSequenceMaxSteps"] == 2000
+    assert "browserUserDataDir" not in payload
+    assert "browserUserDataDirLabel" not in payload
 
 
 def test_preview_ui_javascript_contains_embedded_json_diagnostic_labels() -> None:
@@ -1022,6 +1174,9 @@ def test_browser_preview_uses_simplified_launch_and_load_flow(monkeypatch, tmp_p
     browser_executable = tmp_path / "chrome.exe"
     browser_executable.write_text("fake", encoding="utf-8")
     monkeypatch.setenv("BROWSER_EXECUTABLE_PATH", str(browser_executable))
+    monkeypatch.setenv("BROWSER_HEADLESS", "true")
+    monkeypatch.setenv("BROWSER_PERSISTENT_CONTEXT_ENABLED", "false")
+    monkeypatch.delenv("BROWSER_USER_DATA_DIR", raising=False)
     observed = {}
 
     def fake_run(command, **kwargs):
@@ -1136,6 +1291,9 @@ def test_configured_browser_executable_path_is_preferred_when_present(monkeypatc
     browser_executable = tmp_path / "chrome.exe"
     browser_executable.write_text("fake", encoding="utf-8")
     monkeypatch.setenv("BROWSER_EXECUTABLE_PATH", str(browser_executable))
+    monkeypatch.setenv("BROWSER_HEADLESS", "true")
+    monkeypatch.setenv("BROWSER_PERSISTENT_CONTEXT_ENABLED", "false")
+    monkeypatch.delenv("BROWSER_USER_DATA_DIR", raising=False)
     monkeypatch.delenv("PLAYWRIGHT_BROWSER_CHANNEL", raising=False)
 
     from app.services.browser_preview import build_browser_worker_command
@@ -1918,6 +2076,97 @@ def test_capture_stop_policy_duration_is_passed_to_worker(monkeypatch) -> None:
     assert diagnostics["stoppedBecauseSequenceStable"] is False
 
 
+def test_capture_stop_policy_smart_is_passed_to_worker(monkeypatch) -> None:
+    monkeypatch.setenv("URL_ACCESS_MODE", "open")
+    observed = {}
+
+    def fake_run(command, **kwargs):
+        observed["command"] = command
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "ok": True,
+                    "images": [],
+                    "networkImageCount": 0,
+                    "domImageCount": 0,
+                    "deduplicatedCount": 0,
+                    "captureStopPolicy": "smart",
+                    "captureRequestedDurationSeconds": 120,
+                    "captureActualDurationSeconds": 11.0,
+                    "smartStopEnabled": True,
+                    "smartStopMinSteps": 20,
+                    "smartStopStableRounds": 8,
+                    "smartStopMinSequenceLength": 3,
+                    "smartStopTriggered": True,
+                    "smartStopReason": "smart_sequence_complete",
+                    "readerBoundarySuspected": False,
+                    "lastSequenceGrowthStep": 7,
+                    "largeSequenceModeEnabled": True,
+                    "largeSequenceModeTriggered": True,
+                    "largeSequenceMinLength": 20,
+                    "largeSequenceMaxSteps": 2000,
+                    "largeSequenceStepsExecuted": 114,
+                    "largeSequenceStopReason": "smart_sequence_complete",
+                    "productiveActions": ["keyboard_arrowright", "internal_scroll"],
+                    "lastProductiveAction": "keyboard_arrowright",
+                    "sequenceGrowthEvents": 12,
+                    "sequenceLengthAtNormalStepLimit": 26,
+                    "autonomousStopReason": "smart_sequence_complete",
+                    "stoppedBecauseSequenceStable": True,
+                    "notes": [
+                        "Smart stop used durationSeconds as maximum timeout and may finish earlier when the reader sequence looks complete."
+                    ],
+                }
+            ).encode("utf-8"),
+            stderr=b"",
+        )
+
+    monkeypatch.setattr("app.services.browser_capture.subprocess.run", fake_run)
+
+    response = client.post(
+        "/api/chapters/capture",
+        json={
+            "url": "https://example.com/chapter-1.html",
+            "durationSeconds": 120,
+            "captureMode": "autonomous",
+            "stopPolicy": "smart",
+        },
+    )
+
+    diagnostics = response.json()["diagnostics"]
+    stop_policy_index = observed["command"].index("--stop-policy")
+    large_sequence_mode_index = observed["command"].index(
+        "--large-sequence-mode-enabled"
+    )
+    large_sequence_max_steps_index = observed["command"].index(
+        "--large-sequence-max-steps"
+    )
+
+    assert response.status_code == 200
+    assert observed["command"][stop_policy_index + 1] == "smart"
+    assert observed["command"][large_sequence_mode_index + 1] == "true"
+    assert observed["command"][large_sequence_max_steps_index + 1] == "1000"
+    assert diagnostics["captureStopPolicy"] == "smart"
+    assert diagnostics["smartStopEnabled"] is True
+    assert diagnostics["smartStopTriggered"] is True
+    assert diagnostics["smartStopReason"] == "smart_sequence_complete"
+    assert diagnostics["lastSequenceGrowthStep"] == 7
+    assert diagnostics["largeSequenceModeEnabled"] is True
+    assert diagnostics["largeSequenceModeTriggered"] is True
+    assert diagnostics["largeSequenceMinLength"] == 20
+    assert diagnostics["largeSequenceMaxSteps"] == 2000
+    assert diagnostics["largeSequenceStepsExecuted"] == 114
+    assert diagnostics["largeSequenceStopReason"] == "smart_sequence_complete"
+    assert diagnostics["productiveActions"] == [
+        "keyboard_arrowright",
+        "internal_scroll",
+    ]
+    assert diagnostics["lastProductiveAction"] == "keyboard_arrowright"
+    assert diagnostics["sequenceGrowthEvents"] == 12
+    assert diagnostics["sequenceLengthAtNormalStepLimit"] == 26
+
+
 def test_duration_policy_does_not_stop_early_on_sequence_stability(monkeypatch) -> None:
     from app.services.browser_capture_worker import _run_autonomous_capture
 
@@ -1976,6 +2225,667 @@ def test_duration_policy_does_not_stop_early_on_sequence_stability(monkeypatch) 
     assert diagnostics["autonomousStopReason"] == "duration_elapsed"
     assert diagnostics["stoppedBecauseSequenceStable"] is False
     assert diagnostics["sequenceStableRounds"] >= 1
+
+
+def test_smart_policy_stops_before_duration_when_sequence_stabilizes_after_min_steps(
+    monkeypatch,
+) -> None:
+    import app.services.browser_capture_worker as worker
+
+    class FakeKeyboard:
+        def press(self, key: str) -> None:
+            return None
+
+    class FakeMouse:
+        def wheel(self, dx: int, dy: int) -> None:
+            return None
+
+    class FakePage:
+        def __init__(self):
+            self.keyboard = FakeKeyboard()
+            self.mouse = FakeMouse()
+
+        def evaluate(self, script: str):
+            return None
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            return None
+
+    sequence_rounds = [
+        ["https://example.com/pages/01.webp"],
+        [
+            "https://example.com/pages/01.webp",
+            "https://example.com/pages/02.webp",
+        ],
+        [
+            "https://example.com/pages/01.webp",
+            "https://example.com/pages/02.webp",
+            "https://example.com/pages/03.webp",
+        ],
+        [
+            "https://example.com/pages/01.webp",
+            "https://example.com/pages/02.webp",
+            "https://example.com/pages/03.webp",
+        ],
+        [
+            "https://example.com/pages/01.webp",
+            "https://example.com/pages/02.webp",
+            "https://example.com/pages/03.webp",
+        ],
+    ]
+    ticks = iter(range(100))
+    monkeypatch.setattr("app.services.browser_capture_worker.time.monotonic", lambda: next(ticks))
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._scan_dom_image_urls",
+        lambda page: sequence_rounds.pop(0) if sequence_rounds else [
+            "https://example.com/pages/01.webp",
+            "https://example.com/pages/02.webp",
+            "https://example.com/pages/03.webp",
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_reader_boundary",
+        lambda page: False,
+    )
+
+    args = SimpleNamespace(
+        capture_mode="autonomous",
+        stop_policy="smart",
+        autonomous_enabled="true",
+        autonomous_max_steps=20,
+        autonomous_step_wait_ms=0,
+        autonomous_stable_rounds=5,
+        autonomous_enable_keyboard="true",
+        autonomous_enable_mouse_wheel="true",
+        carousel_exploration_enabled="true",
+        carousel_max_steps=20,
+        sequence_stable_rounds=6,
+        duration_seconds=120,
+        smart_stop_min_steps=3,
+        smart_stop_stable_rounds=2,
+        smart_stop_min_sequence_length=3,
+        smart_stop_use_reader_boundary="true",
+    )
+    discovered = []
+    seen = set()
+
+    def add_image(url: str, source: str) -> None:
+        if url in seen:
+            return
+        seen.add(url)
+        discovered.append({"url": url, "source": source})
+
+    diagnostics = worker._run_autonomous_capture(
+        FakePage(),
+        args,
+        add_image,
+        discovered,
+        lambda: 0,
+    )
+
+    assert diagnostics["smartStopTriggered"] is True
+    assert diagnostics["smartStopReason"] == "smart_sequence_complete"
+    assert diagnostics["autonomousStopReason"] == "smart_sequence_complete"
+    assert diagnostics["autonomousStepsExecuted"] == 5
+
+
+def test_smart_policy_does_not_stop_before_min_steps(monkeypatch) -> None:
+    import app.services.browser_capture_worker as worker
+
+    class FakeKeyboard:
+        def press(self, key: str) -> None:
+            return None
+
+    class FakeMouse:
+        def wheel(self, dx: int, dy: int) -> None:
+            return None
+
+    class FakePage:
+        def __init__(self):
+            self.keyboard = FakeKeyboard()
+            self.mouse = FakeMouse()
+
+        def evaluate(self, script: str):
+            return None
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            return None
+
+    ticks = iter(range(100))
+    monkeypatch.setattr("app.services.browser_capture_worker.time.monotonic", lambda: next(ticks))
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._scan_dom_image_urls",
+        lambda page: [
+            "https://example.com/pages/01.webp",
+            "https://example.com/pages/02.webp",
+            "https://example.com/pages/03.webp",
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_reader_boundary",
+        lambda page: False,
+    )
+
+    args = SimpleNamespace(
+        capture_mode="autonomous",
+        stop_policy="smart",
+        autonomous_enabled="true",
+        autonomous_max_steps=5,
+        autonomous_step_wait_ms=0,
+        autonomous_stable_rounds=5,
+        autonomous_enable_keyboard="true",
+        autonomous_enable_mouse_wheel="true",
+        carousel_exploration_enabled="true",
+        carousel_max_steps=5,
+        sequence_stable_rounds=6,
+        duration_seconds=120,
+        smart_stop_min_steps=6,
+        smart_stop_stable_rounds=2,
+        smart_stop_min_sequence_length=3,
+        smart_stop_use_reader_boundary="true",
+    )
+    discovered = []
+    seen = set()
+
+    def add_image(url: str, source: str) -> None:
+        if url in seen:
+            return
+        seen.add(url)
+        discovered.append({"url": url, "source": source})
+
+    diagnostics = worker._run_autonomous_capture(
+        FakePage(),
+        args,
+        add_image,
+        discovered,
+        lambda: 0,
+    )
+
+    assert diagnostics["smartStopTriggered"] is False
+    assert diagnostics["autonomousStopReason"] == "max_steps_reached"
+
+
+def test_smart_policy_can_stop_on_reader_boundary_after_stable_sequence(monkeypatch) -> None:
+    import app.services.browser_capture_worker as worker
+
+    class FakeKeyboard:
+        def press(self, key: str) -> None:
+            return None
+
+    class FakeMouse:
+        def wheel(self, dx: int, dy: int) -> None:
+            return None
+
+    class FakePage:
+        def __init__(self):
+            self.keyboard = FakeKeyboard()
+            self.mouse = FakeMouse()
+
+        def evaluate(self, script: str):
+            return None
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            return None
+
+    sequence_rounds = [
+        ["https://example.com/pages/01.webp"],
+        [
+            "https://example.com/pages/01.webp",
+            "https://example.com/pages/02.webp",
+        ],
+        [
+            "https://example.com/pages/01.webp",
+            "https://example.com/pages/02.webp",
+            "https://example.com/pages/03.webp",
+        ],
+        [
+            "https://example.com/pages/01.webp",
+            "https://example.com/pages/02.webp",
+            "https://example.com/pages/03.webp",
+        ],
+        [
+            "https://example.com/pages/01.webp",
+            "https://example.com/pages/02.webp",
+            "https://example.com/pages/03.webp",
+        ],
+    ]
+    ticks = iter(range(100))
+    monkeypatch.setattr("app.services.browser_capture_worker.time.monotonic", lambda: next(ticks))
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._scan_dom_image_urls",
+        lambda page: sequence_rounds.pop(0) if sequence_rounds else [
+            "https://example.com/pages/01.webp",
+            "https://example.com/pages/02.webp",
+            "https://example.com/pages/03.webp",
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_reader_boundary",
+        lambda page: True,
+    )
+
+    args = SimpleNamespace(
+        capture_mode="autonomous",
+        stop_policy="smart",
+        autonomous_enabled="true",
+        autonomous_max_steps=20,
+        autonomous_step_wait_ms=0,
+        autonomous_stable_rounds=5,
+        autonomous_enable_keyboard="true",
+        autonomous_enable_mouse_wheel="true",
+        carousel_exploration_enabled="true",
+        carousel_max_steps=20,
+        sequence_stable_rounds=6,
+        duration_seconds=120,
+        smart_stop_min_steps=3,
+        smart_stop_stable_rounds=2,
+        smart_stop_min_sequence_length=3,
+        smart_stop_use_reader_boundary="true",
+    )
+    discovered = []
+    seen = set()
+
+    def add_image(url: str, source: str) -> None:
+        if url in seen:
+            return
+        seen.add(url)
+        discovered.append({"url": url, "source": source})
+
+    diagnostics = worker._run_autonomous_capture(
+        FakePage(),
+        args,
+        add_image,
+        discovered,
+        lambda: 0,
+    )
+
+    assert diagnostics["smartStopTriggered"] is True
+    assert diagnostics["readerBoundarySuspected"] is True
+    assert diagnostics["smartStopReason"] == "smart_reader_boundary"
+
+
+def test_large_sequence_mode_triggers_after_min_sequence_length(monkeypatch) -> None:
+    import app.services.browser_capture_worker as worker
+
+    class FakePage:
+        def __init__(self):
+            self.keyboard = SimpleNamespace(press=lambda key: None)
+            self.mouse = SimpleNamespace(wheel=lambda dx, dy: None)
+
+        def evaluate(self, script: str):
+            return None
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            return None
+
+    ticks = iter(range(100))
+    monkeypatch.setattr("app.services.browser_capture_worker.time.monotonic", lambda: next(ticks))
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._scan_dom_image_urls",
+        lambda page: [
+            "https://example.com/pages/01.webp",
+            "https://example.com/pages/02.webp",
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_reader_boundary",
+        lambda page: False,
+    )
+
+    args = SimpleNamespace(
+        capture_mode="autonomous",
+        stop_policy="smart",
+        autonomous_enabled="true",
+        autonomous_max_steps=4,
+        autonomous_step_wait_ms=0,
+        autonomous_enable_keyboard="true",
+        autonomous_enable_mouse_wheel="true",
+        carousel_exploration_enabled="true",
+        carousel_max_steps=4,
+        sequence_stable_rounds=6,
+        duration_seconds=20,
+        smart_stop_min_steps=1,
+        smart_stop_stable_rounds=1,
+        smart_stop_min_sequence_length=2,
+        smart_stop_use_reader_boundary="true",
+        large_sequence_mode_enabled="true",
+        large_sequence_min_length=2,
+        large_sequence_max_steps=10,
+        large_sequence_step_wait_ms=0,
+        large_sequence_extend_while_growing="true",
+        large_sequence_stable_rounds=2,
+    )
+    discovered = []
+    seen = set()
+
+    def add_image(url: str, source: str) -> None:
+        if url in seen:
+            return
+        seen.add(url)
+        discovered.append({"url": url, "source": source})
+
+    diagnostics = worker._run_autonomous_capture(FakePage(), args, add_image, discovered)
+
+    assert diagnostics["largeSequenceModeEnabled"] is True
+    assert diagnostics["largeSequenceModeTriggered"] is True
+    assert diagnostics["largeSequenceMinLength"] == 2
+
+
+def test_sequence_still_growing_near_normal_max_steps_extends_exploration(monkeypatch) -> None:
+    import app.services.browser_capture_worker as worker
+
+    class FakePage:
+        def __init__(self):
+            self.keyboard = SimpleNamespace(press=lambda key: None)
+            self.mouse = SimpleNamespace(wheel=lambda dx, dy: None)
+
+        def evaluate(self, script: str):
+            return None
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            return None
+
+    ticks = iter(range(200))
+    monkeypatch.setattr("app.services.browser_capture_worker.time.monotonic", lambda: next(ticks))
+    scan_state = {"count": 0}
+
+    def fake_scan(_: object) -> list[str]:
+        scan_state["count"] += 1
+        return [
+            f"https://example.com/pages/{index:03d}.webp"
+            for index in range(1, scan_state["count"] + 2)
+        ]
+
+    monkeypatch.setattr("app.services.browser_capture_worker._scan_dom_image_urls", fake_scan)
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_reader_boundary",
+        lambda page: False,
+    )
+
+    args = SimpleNamespace(
+        capture_mode="autonomous",
+        stop_policy="smart",
+        autonomous_enabled="true",
+        autonomous_max_steps=3,
+        autonomous_step_wait_ms=0,
+        autonomous_enable_keyboard="true",
+        autonomous_enable_mouse_wheel="true",
+        carousel_exploration_enabled="true",
+        carousel_max_steps=3,
+        sequence_stable_rounds=6,
+        duration_seconds=20,
+        smart_stop_min_steps=50,
+        smart_stop_stable_rounds=50,
+        smart_stop_min_sequence_length=2,
+        smart_stop_use_reader_boundary="true",
+        large_sequence_mode_enabled="true",
+        large_sequence_min_length=2,
+        large_sequence_max_steps=6,
+        large_sequence_step_wait_ms=0,
+        large_sequence_extend_while_growing="true",
+        large_sequence_stable_rounds=25,
+    )
+    discovered = []
+    seen = set()
+
+    def add_image(url: str, source: str) -> None:
+        if url in seen:
+            return
+        seen.add(url)
+        discovered.append({"url": url, "source": source})
+
+    diagnostics = worker._run_autonomous_capture(FakePage(), args, add_image, discovered)
+
+    assert diagnostics["largeSequenceModeTriggered"] is True
+    assert diagnostics["autonomousStepsExecuted"] > 3
+    assert diagnostics["sequenceLengthAtNormalStepLimit"] > 0
+    assert diagnostics["largeSequenceStopReason"] == "max_steps_reached"
+
+
+def test_productive_action_tracking_prefers_recent_growth_actions(monkeypatch) -> None:
+    import app.services.browser_capture_worker as worker
+
+    class FakeKeyboard:
+        def __init__(self, page):
+            self.page = page
+
+        def press(self, key: str) -> None:
+            self.page.last_action = f"keyboard_{key.lower()}"
+
+    class FakeMouse:
+        def __init__(self, page):
+            self.page = page
+
+        def wheel(self, dx: int, dy: int) -> None:
+            self.page.last_action = "mouse_wheel"
+
+    class FakePage:
+        def __init__(self):
+            self.last_action = ""
+            self.keyboard = FakeKeyboard(self)
+            self.mouse = FakeMouse(self)
+
+        def evaluate(self, script: str):
+            if "document.body.focus" in script:
+                self.last_action = "focus_body"
+            elif "window.scrollBy" in script:
+                self.last_action = "window_scroll"
+            return None
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._build_autonomous_actions",
+        lambda args: [
+            ("keyboard_arrowright", lambda page: page.keyboard.press("ArrowRight")),
+            ("internal_scroll", lambda page: setattr(page, "last_action", "internal_scroll")),
+            ("mouse_wheel", lambda page: page.mouse.wheel(0, 1000)),
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_reader_boundary",
+        lambda page: False,
+    )
+    ticks = iter(range(200))
+    monkeypatch.setattr("app.services.browser_capture_worker.time.monotonic", lambda: next(ticks))
+
+    def fake_scan(page) -> list[str]:
+        if page.last_action == "keyboard_arrowright":
+            page.arrow_growth = getattr(page, "arrow_growth", 0) + 1
+            length = min(page.arrow_growth + 1, 5)
+        else:
+            length = min(getattr(page, "arrow_growth", 0) + 1, 5)
+        return [
+            f"https://example.com/pages/{index:03d}.webp"
+            for index in range(1, length + 1)
+        ]
+
+    monkeypatch.setattr("app.services.browser_capture_worker._scan_dom_image_urls", fake_scan)
+
+    args = SimpleNamespace(
+        capture_mode="autonomous",
+        stop_policy="smart",
+        autonomous_enabled="true",
+        autonomous_max_steps=6,
+        autonomous_step_wait_ms=0,
+        autonomous_enable_keyboard="true",
+        autonomous_enable_mouse_wheel="true",
+        carousel_exploration_enabled="true",
+        carousel_max_steps=6,
+        sequence_stable_rounds=6,
+        duration_seconds=20,
+        smart_stop_min_steps=50,
+        smart_stop_stable_rounds=50,
+        smart_stop_min_sequence_length=2,
+        smart_stop_use_reader_boundary="true",
+        large_sequence_mode_enabled="true",
+        large_sequence_min_length=2,
+        large_sequence_max_steps=6,
+        large_sequence_step_wait_ms=0,
+        large_sequence_extend_while_growing="true",
+        large_sequence_stable_rounds=25,
+    )
+    discovered = []
+    seen = set()
+
+    def add_image(url: str, source: str) -> None:
+        if url in seen:
+            return
+        seen.add(url)
+        discovered.append({"url": url, "source": source})
+
+    diagnostics = worker._run_autonomous_capture(FakePage(), args, add_image, discovered)
+
+    assert diagnostics["sequenceGrowthEvents"] > 0
+    assert diagnostics["productiveActions"][0] == "keyboard_arrowright"
+    assert diagnostics["lastProductiveAction"] == "keyboard_arrowright"
+    assert diagnostics["autonomousActionsUsed"].count("keyboard_arrowright") > 1
+
+
+def test_large_sequence_mode_stops_after_stable_rounds(monkeypatch) -> None:
+    import app.services.browser_capture_worker as worker
+
+    class FakePage:
+        def __init__(self):
+            self.keyboard = SimpleNamespace(press=lambda key: None)
+            self.mouse = SimpleNamespace(wheel=lambda dx, dy: None)
+
+        def evaluate(self, script: str):
+            return None
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            return None
+
+    ticks = iter(range(200))
+    monkeypatch.setattr("app.services.browser_capture_worker.time.monotonic", lambda: next(ticks))
+    sequence_rounds = [
+        ["https://example.com/pages/01.webp", "https://example.com/pages/02.webp"],
+        ["https://example.com/pages/01.webp", "https://example.com/pages/02.webp", "https://example.com/pages/03.webp"],
+        ["https://example.com/pages/01.webp", "https://example.com/pages/02.webp", "https://example.com/pages/03.webp"],
+        ["https://example.com/pages/01.webp", "https://example.com/pages/02.webp", "https://example.com/pages/03.webp"],
+        ["https://example.com/pages/01.webp", "https://example.com/pages/02.webp", "https://example.com/pages/03.webp"],
+    ]
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._scan_dom_image_urls",
+        lambda page: sequence_rounds.pop(0) if sequence_rounds else [
+            "https://example.com/pages/01.webp",
+            "https://example.com/pages/02.webp",
+            "https://example.com/pages/03.webp",
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_reader_boundary",
+        lambda page: False,
+    )
+
+    args = SimpleNamespace(
+        capture_mode="autonomous",
+        stop_policy="smart",
+        autonomous_enabled="true",
+        autonomous_max_steps=3,
+        autonomous_step_wait_ms=0,
+        autonomous_enable_keyboard="true",
+        autonomous_enable_mouse_wheel="true",
+        carousel_exploration_enabled="true",
+        carousel_max_steps=3,
+        sequence_stable_rounds=6,
+        duration_seconds=20,
+        smart_stop_min_steps=2,
+        smart_stop_stable_rounds=2,
+        smart_stop_min_sequence_length=2,
+        smart_stop_use_reader_boundary="true",
+        large_sequence_mode_enabled="true",
+        large_sequence_min_length=2,
+        large_sequence_max_steps=20,
+        large_sequence_step_wait_ms=0,
+        large_sequence_extend_while_growing="true",
+        large_sequence_stable_rounds=2,
+    )
+    discovered = []
+    seen = set()
+
+    def add_image(url: str, source: str) -> None:
+        if url in seen:
+            return
+        seen.add(url)
+        discovered.append({"url": url, "source": source})
+
+    diagnostics = worker._run_autonomous_capture(FakePage(), args, add_image, discovered)
+
+    assert diagnostics["largeSequenceModeTriggered"] is True
+    assert diagnostics["smartStopTriggered"] is True
+    assert diagnostics["largeSequenceStopReason"] == "smart_sequence_complete"
+
+
+def test_large_sequence_max_steps_is_hard_cap(monkeypatch) -> None:
+    import app.services.browser_capture_worker as worker
+
+    class FakePage:
+        def __init__(self):
+            self.keyboard = SimpleNamespace(press=lambda key: None)
+            self.mouse = SimpleNamespace(wheel=lambda dx, dy: None)
+
+        def evaluate(self, script: str):
+            return None
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            return None
+
+    ticks = iter(range(400))
+    monkeypatch.setattr("app.services.browser_capture_worker.time.monotonic", lambda: next(ticks))
+    scan_state = {"count": 0}
+
+    def fake_scan(_: object) -> list[str]:
+        scan_state["count"] += 1
+        return [
+            f"https://example.com/pages/{index:03d}.webp"
+            for index in range(1, scan_state["count"] + 2)
+        ]
+
+    monkeypatch.setattr("app.services.browser_capture_worker._scan_dom_image_urls", fake_scan)
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_reader_boundary",
+        lambda page: False,
+    )
+
+    args = SimpleNamespace(
+        capture_mode="autonomous",
+        stop_policy="smart",
+        autonomous_enabled="true",
+        autonomous_max_steps=2,
+        autonomous_step_wait_ms=0,
+        autonomous_enable_keyboard="true",
+        autonomous_enable_mouse_wheel="true",
+        carousel_exploration_enabled="true",
+        carousel_max_steps=2,
+        sequence_stable_rounds=6,
+        duration_seconds=50,
+        smart_stop_min_steps=100,
+        smart_stop_stable_rounds=100,
+        smart_stop_min_sequence_length=2,
+        smart_stop_use_reader_boundary="true",
+        large_sequence_mode_enabled="true",
+        large_sequence_min_length=2,
+        large_sequence_max_steps=5,
+        large_sequence_step_wait_ms=0,
+        large_sequence_extend_while_growing="true",
+        large_sequence_stable_rounds=25,
+    )
+    discovered = []
+    seen = set()
+
+    def add_image(url: str, source: str) -> None:
+        if url in seen:
+            return
+        seen.add(url)
+        discovered.append({"url": url, "source": source})
+
+    diagnostics = worker._run_autonomous_capture(FakePage(), args, add_image, discovered)
+
+    assert diagnostics["autonomousStepsExecuted"] == 5
+    assert diagnostics["autonomousStopReason"] == "max_steps_reached"
+    assert diagnostics["largeSequenceStopReason"] == "max_steps_reached"
 
 
 def test_capture_diagnostics_include_session_fields(monkeypatch) -> None:
@@ -2300,6 +3210,24 @@ def test_autonomous_capture_diagnostics_include_reader_fields(monkeypatch) -> No
                     "sequenceLengthBeforeExploration": 1,
                     "sequenceLengthAfterExploration": 3,
                     "sequenceStableRounds": 6,
+                    "smartStopEnabled": True,
+                    "smartStopMinSteps": 20,
+                    "smartStopStableRounds": 8,
+                    "smartStopMinSequenceLength": 3,
+                    "smartStopTriggered": True,
+                    "smartStopReason": "smart_sequence_complete",
+                    "readerBoundarySuspected": False,
+                    "lastSequenceGrowthStep": 6,
+                    "largeSequenceModeEnabled": True,
+                    "largeSequenceModeTriggered": True,
+                    "largeSequenceMinLength": 20,
+                    "largeSequenceMaxSteps": 1000,
+                    "largeSequenceStepsExecuted": 12,
+                    "largeSequenceStopReason": "smart_sequence_complete",
+                    "productiveActions": ["keyboard_arrowright", "internal_scroll"],
+                    "lastProductiveAction": "keyboard_arrowright",
+                    "sequenceGrowthEvents": 5,
+                    "sequenceLengthAtNormalStepLimit": 24,
                     "autonomousStopReason": "sequence_stable",
                     "blockedByOverlaySuspected": False,
                     "notes": [
@@ -2333,6 +3261,19 @@ def test_autonomous_capture_diagnostics_include_reader_fields(monkeypatch) -> No
     assert diagnostics["sequenceLengthBeforeExploration"] == 1
     assert diagnostics["sequenceLengthAfterExploration"] == 3
     assert diagnostics["sequenceStableRounds"] == 6
+    assert diagnostics["smartStopEnabled"] is True
+    assert diagnostics["smartStopTriggered"] is True
+    assert diagnostics["smartStopReason"] == "smart_sequence_complete"
+    assert diagnostics["lastSequenceGrowthStep"] == 6
+    assert diagnostics["largeSequenceModeEnabled"] is True
+    assert diagnostics["largeSequenceModeTriggered"] is True
+    assert diagnostics["largeSequenceMaxSteps"] == 1000
+    assert diagnostics["largeSequenceStepsExecuted"] == 12
+    assert diagnostics["largeSequenceStopReason"] == "smart_sequence_complete"
+    assert diagnostics["productiveActions"] == ["keyboard_arrowright", "internal_scroll"]
+    assert diagnostics["lastProductiveAction"] == "keyboard_arrowright"
+    assert diagnostics["sequenceGrowthEvents"] == 5
+    assert diagnostics["sequenceLengthAtNormalStepLimit"] == 24
     assert diagnostics["autonomousStopReason"] == "sequence_stable"
     assert diagnostics["blockedByOverlaySuspected"] is False
 
@@ -2655,6 +3596,95 @@ def test_capture_worker_invalid_output_maps_to_clean_error(monkeypatch) -> None:
     assert response.json()["detail"] == "Browser capture worker failed."
 
 
+def test_capture_worker_argparse_accepts_large_sequence_args() -> None:
+    from app.services.browser_capture_worker import build_parser
+
+    args = build_parser().parse_args(
+        [
+            "--url",
+            "https://example.com",
+            "--duration-seconds",
+            "20",
+            "--timeout-ms",
+            "10000",
+            "--large-sequence-mode-enabled",
+            "true",
+            "--large-sequence-min-length",
+            "20",
+            "--large-sequence-max-steps",
+            "2000",
+            "--large-sequence-step-wait-ms",
+            "200",
+            "--large-sequence-extend-while-growing",
+            "true",
+            "--large-sequence-stable-rounds",
+            "25",
+        ]
+    )
+
+    assert args.large_sequence_mode_enabled == "true"
+    assert args.large_sequence_min_length == 20
+    assert args.large_sequence_max_steps == 2000
+    assert args.large_sequence_step_wait_ms == 200
+    assert args.large_sequence_extend_while_growing == "true"
+    assert args.large_sequence_stable_rounds == 25
+
+
+def test_capture_parent_worker_cli_contract_includes_large_sequence_args(monkeypatch) -> None:
+    monkeypatch.setenv("BROWSER_HEADLESS", "true")
+    monkeypatch.setenv("BROWSER_PERSISTENT_CONTEXT_ENABLED", "false")
+    monkeypatch.delenv("BROWSER_USER_DATA_DIR", raising=False)
+
+    from app.services.browser_capture import build_capture_worker_command
+    from app.services.browser_capture_worker import build_parser
+
+    command = build_capture_worker_command(
+        source_url="https://example.com",
+        duration_seconds=20,
+        timeout_seconds=10.0,
+        browser_executable_path=None,
+        browser_channel=None,
+        headless=True,
+        user_data_dir=None,
+        persistent_context_enabled=False,
+        capture_mode="autonomous",
+        stop_policy="smart",
+        autonomous_enabled=True,
+        autonomous_max_steps=60,
+        autonomous_step_wait_ms=700,
+        autonomous_stable_rounds=5,
+        autonomous_enable_keyboard=True,
+        autonomous_enable_mouse_wheel=True,
+        reader_readiness_enabled=True,
+        overlay_dismiss_enabled=True,
+        overlay_max_attempts=3,
+        carousel_exploration_enabled=True,
+        carousel_max_steps=80,
+        sequence_stable_rounds=6,
+        smart_stop_min_steps=20,
+        smart_stop_stable_rounds=8,
+        smart_stop_min_sequence_length=3,
+        smart_stop_use_reader_boundary=True,
+        large_sequence_mode_enabled=True,
+        large_sequence_min_length=20,
+        large_sequence_max_steps=2000,
+        large_sequence_step_wait_ms=200,
+        large_sequence_extend_while_growing=True,
+        large_sequence_stable_rounds=25,
+    )
+
+    parsed = build_parser().parse_args(command[3:])
+
+    assert parsed.capture_mode == "autonomous"
+    assert parsed.stop_policy == "smart"
+    assert parsed.large_sequence_mode_enabled == "true"
+    assert parsed.large_sequence_min_length == 20
+    assert parsed.large_sequence_max_steps == 2000
+    assert parsed.large_sequence_step_wait_ms == 200
+    assert parsed.large_sequence_extend_while_growing == "true"
+    assert parsed.large_sequence_stable_rounds == 25
+
+
 def test_capture_worker_stage_failures_map_to_clean_errors(monkeypatch) -> None:
     monkeypatch.setenv("URL_ACCESS_MODE", "open")
     cases = [
@@ -2683,6 +3713,1050 @@ def test_capture_worker_stage_failures_map_to_clean_errors(monkeypatch) -> None:
         )
         assert response.status_code in {500, 502}
         assert response.json()["detail"] == expected_detail
+
+
+def test_batch_endpoint_exists_and_uses_default_analysis_mode(
+    monkeypatch, tmp_path
+) -> None:
+    from app.schemas import (
+        ChapterCaptureDiagnostics,
+        ChapterCaptureImage,
+        ChapterCaptureResponse,
+    )
+
+    monkeypatch.setenv("URL_ACCESS_MODE", "open")
+    monkeypatch.setenv("BATCH_REPORT_BASE_DIR", str(tmp_path / "batches"))
+    observed = {}
+
+    async def fake_capture(url: str, duration: int, capture_mode: str, stop_policy: str):
+        observed["call"] = (url, duration, capture_mode, stop_policy)
+        return ChapterCaptureResponse(
+            sourceUrl=url,
+            captureDurationSeconds=duration,
+            imageCount=1,
+            images=[
+                ChapterCaptureImage(
+                    index=1,
+                    url="https://example.com/pages/01.webp",
+                    filename="001.webp",
+                    source="network",
+                )
+            ],
+            diagnostics=ChapterCaptureDiagnostics(
+                browserRendered=True,
+                captureMode="autonomous",
+                networkImageCount=1,
+                domImageCount=0,
+                deduplicatedCount=0,
+                browserHeadless=True,
+                browserPersistentContextEnabled=False,
+                browserUserDataDirConfigured=False,
+                browserSessionMode="ephemeral",
+                captureStopPolicy=stop_policy,
+                captureRequestedDurationSeconds=duration,
+                captureActualDurationSeconds=1.0,
+                stoppedBecauseSequenceStable=True,
+                autonomousModeEnabled=True,
+                autonomousStepsExecuted=1,
+                autonomousActionsUsed=["window_scroll"],
+                imageCountBeforeAutonomousActions=0,
+                imageCountAfterAutonomousActions=1,
+                imageCountStableRounds=1,
+                observedImageCount=1,
+                selectedImageCount=1,
+                excludedImageCount=0,
+                selectionStrategy="dominant_numeric_sequence",
+                dominantSequenceDetected=True,
+                dominantSequenceLength=1,
+                numericOrderingApplied=True,
+                duplicatePageNumberCount=0,
+                missingPageNumbers=[],
+                selectedPageNumbers=[1],
+                orderingStrategy="numeric_page_number",
+                readerReadinessEnabled=True,
+                overlayDismissEnabled=True,
+                overlayDismissAttempts=0,
+                overlayDismissedCount=0,
+                carouselExplorationEnabled=True,
+                carouselStepsExecuted=0,
+                sequenceLengthBeforeExploration=1,
+                sequenceLengthAfterExploration=1,
+                sequenceStableRounds=1,
+                smartStopEnabled=False,
+                smartStopMinSteps=20,
+                smartStopStableRounds=8,
+                smartStopMinSequenceLength=3,
+                smartStopTriggered=False,
+                smartStopReason="none",
+                readerBoundarySuspected=False,
+                lastSequenceGrowthStep=0,
+                largeSequenceModeEnabled=True,
+                largeSequenceModeTriggered=False,
+                largeSequenceMinLength=20,
+                largeSequenceMaxSteps=1000,
+                largeSequenceStepsExecuted=0,
+                largeSequenceStopReason="none",
+                productiveActions=[],
+                lastProductiveAction="",
+                sequenceGrowthEvents=0,
+                sequenceLengthAtNormalStepLimit=0,
+                autonomousStopReason="sequence_stable",
+                blockedByOverlaySuspected=False,
+                manualInteractionExpected=False,
+                notes=[],
+            ),
+        )
+
+    monkeypatch.setattr("app.services.batch_jobs.capture_chapter_images", fake_capture)
+
+    create_response = client.post(
+        "/api/chapters/batch",
+        json={"urls": ["https://example.com/chapter-1.html"]},
+    )
+
+    assert create_response.status_code == 202
+    create_payload = create_response.json()
+    assert create_payload["status"] == "queued"
+
+    status_payload = _wait_for_batch_completion(create_payload["jobId"])
+
+    assert status_payload["analysisMode"] == "autonomous_capture"
+    assert status_payload["status"] == "completed"
+    assert observed["call"] == (
+        "https://example.com/chapter-1.html",
+        30,
+        "autonomous",
+        "sequence_stable",
+    )
+
+
+def test_batch_empty_urls_rejected(monkeypatch) -> None:
+    monkeypatch.setenv("URL_ACCESS_MODE", "open")
+
+    response = client.post("/api/chapters/batch", json={"urls": []})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Batch request must include at least one URL."
+
+
+def test_batch_too_many_urls_rejected(monkeypatch) -> None:
+    monkeypatch.setenv("URL_ACCESS_MODE", "open")
+    monkeypatch.setenv("BATCH_MAX_URLS", "1")
+
+    response = client.post(
+        "/api/chapters/batch",
+        json={
+            "urls": [
+                "https://example.com/chapter-1.html",
+                "https://example.com/chapter-2.html",
+            ]
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Batch request exceeds maximum URL count of 1."
+
+
+def test_static_preview_batch_calls_static_preview(monkeypatch, tmp_path) -> None:
+    from app.schemas import ChapterImagePreview, ChapterPreviewDiagnostics, ChapterPreviewResponse
+
+    monkeypatch.setenv("URL_ACCESS_MODE", "open")
+    monkeypatch.setenv("BATCH_REPORT_BASE_DIR", str(tmp_path / "batches"))
+    observed = {}
+
+    async def fake_preview(url: str, render_mode: str = "static"):
+        observed["call"] = (url, render_mode)
+        return ChapterPreviewResponse(
+            sourceUrl=url,
+            imageCount=1,
+            images=[
+                ChapterImagePreview(
+                    index=1,
+                    url="https://example.com/images/01.jpg",
+                    filename="001.jpg",
+                )
+            ],
+            diagnostics=ChapterPreviewDiagnostics(
+                htmlLength=10,
+                imgTagCount=1,
+                imagesFromSrc=1,
+                imagesFromDataSrc=0,
+                imagesFromDataLazySrc=0,
+                imagesFromDataOriginal=0,
+                imagesFromDataUrl=0,
+                imagesFromSrcset=0,
+                imagesFromSourceSrcset=0,
+                imagesFromMeta=0,
+                jsonScriptCount=0,
+                embeddedImageUrlCount=0,
+                imagesFromEmbeddedJson=0,
+                deduplicatedCount=0,
+                looksDynamic=False,
+                hasAppRootShell=False,
+                possibleApiDrivenPage=False,
+                renderModeUsed="static",
+                browserRendered=False,
+                domImageCount=0,
+                browserFilteredImageCount=0,
+                browserHeadless=True,
+                browserPersistentContextEnabled=False,
+                browserUserDataDirConfigured=False,
+                browserSessionMode="ephemeral",
+                browserScrollEnabled=False,
+                browserScrollSteps=0,
+                browserScrollHeightBefore=0,
+                browserScrollHeightAfter=0,
+                browserLazyLoadWaitMs=0,
+                browserScrollableContainerCount=0,
+                browserScrolledContainerCount=0,
+                browserMouseWheelSteps=0,
+                browserImageCountBeforeScroll=0,
+                browserImageCountAfterScroll=0,
+                browserImageCountStableRounds=0,
+                browserScrollStrategy="none",
+                browserExtractionNotes=[],
+                notes=[],
+            ),
+        )
+
+    monkeypatch.setattr("app.services.batch_jobs.build_chapter_preview", fake_preview)
+
+    create_response = client.post(
+        "/api/chapters/batch",
+        json={
+            "urls": ["https://example.com/chapter-1.html"],
+            "analysisMode": "static_preview",
+        },
+    )
+    status_payload = _wait_for_batch_completion(create_response.json()["jobId"])
+
+    assert observed["call"] == ("https://example.com/chapter-1.html", "static")
+    assert status_payload["items"][0]["result"]["diagnostics"]["renderModeUsed"] == "static"
+
+
+def test_browser_preview_batch_calls_browser_preview(monkeypatch, tmp_path) -> None:
+    from app.schemas import ChapterImagePreview, ChapterPreviewDiagnostics, ChapterPreviewResponse
+
+    monkeypatch.setenv("URL_ACCESS_MODE", "open")
+    monkeypatch.setenv("BATCH_REPORT_BASE_DIR", str(tmp_path / "batches"))
+    observed = {}
+
+    async def fake_preview(url: str, render_mode: str = "static"):
+        observed["call"] = (url, render_mode)
+        return ChapterPreviewResponse(
+            sourceUrl=url,
+            imageCount=0,
+            images=[],
+            diagnostics=ChapterPreviewDiagnostics(
+                htmlLength=10,
+                imgTagCount=0,
+                imagesFromSrc=0,
+                imagesFromDataSrc=0,
+                imagesFromDataLazySrc=0,
+                imagesFromDataOriginal=0,
+                imagesFromDataUrl=0,
+                imagesFromSrcset=0,
+                imagesFromSourceSrcset=0,
+                imagesFromMeta=0,
+                jsonScriptCount=0,
+                embeddedImageUrlCount=0,
+                imagesFromEmbeddedJson=0,
+                deduplicatedCount=0,
+                looksDynamic=True,
+                hasAppRootShell=True,
+                possibleApiDrivenPage=True,
+                renderModeUsed="browser",
+                browserRendered=True,
+                domImageCount=0,
+                browserFilteredImageCount=0,
+                browserHeadless=True,
+                browserPersistentContextEnabled=False,
+                browserUserDataDirConfigured=False,
+                browserSessionMode="ephemeral",
+                browserScrollEnabled=True,
+                browserScrollSteps=0,
+                browserScrollHeightBefore=0,
+                browserScrollHeightAfter=0,
+                browserLazyLoadWaitMs=0,
+                browserScrollableContainerCount=0,
+                browserScrolledContainerCount=0,
+                browserMouseWheelSteps=0,
+                browserImageCountBeforeScroll=0,
+                browserImageCountAfterScroll=0,
+                browserImageCountStableRounds=0,
+                browserScrollStrategy="none",
+                browserExtractionNotes=[],
+                notes=[],
+            ),
+        )
+
+    monkeypatch.setattr("app.services.batch_jobs.build_chapter_preview", fake_preview)
+
+    create_response = client.post(
+        "/api/chapters/batch",
+        json={
+            "urls": ["https://example.com/chapter-1.html"],
+            "analysisMode": "browser_preview",
+        },
+    )
+    status_payload = _wait_for_batch_completion(create_response.json()["jobId"])
+
+    assert observed["call"] == ("https://example.com/chapter-1.html", "browser")
+    assert status_payload["items"][0]["result"]["diagnostics"]["renderModeUsed"] == "browser"
+
+
+def test_autonomous_capture_batch_calls_capture_autonomous(monkeypatch, tmp_path) -> None:
+    from app.schemas import ChapterCaptureDiagnostics, ChapterCaptureResponse
+
+    monkeypatch.setenv("URL_ACCESS_MODE", "open")
+    monkeypatch.setenv("BATCH_REPORT_BASE_DIR", str(tmp_path / "batches"))
+    observed = {}
+
+    async def fake_capture(url: str, duration: int, capture_mode: str, stop_policy: str):
+        observed["call"] = (url, duration, capture_mode, stop_policy)
+        return ChapterCaptureResponse(
+            sourceUrl=url,
+            captureDurationSeconds=duration,
+            imageCount=0,
+            images=[],
+            diagnostics=ChapterCaptureDiagnostics(
+                browserRendered=True,
+                captureMode="autonomous",
+                networkImageCount=0,
+                domImageCount=0,
+                deduplicatedCount=0,
+                browserHeadless=True,
+                browserPersistentContextEnabled=False,
+                browserUserDataDirConfigured=False,
+                browserSessionMode="ephemeral",
+                captureStopPolicy=stop_policy,
+                captureRequestedDurationSeconds=duration,
+                captureActualDurationSeconds=0.5,
+                stoppedBecauseSequenceStable=False,
+                autonomousModeEnabled=True,
+                autonomousStepsExecuted=0,
+                autonomousActionsUsed=[],
+                imageCountBeforeAutonomousActions=0,
+                imageCountAfterAutonomousActions=0,
+                imageCountStableRounds=0,
+                observedImageCount=0,
+                selectedImageCount=0,
+                excludedImageCount=0,
+                selectionStrategy="discovery_order",
+                dominantSequenceDetected=False,
+                dominantSequenceLength=0,
+                numericOrderingApplied=False,
+                duplicatePageNumberCount=0,
+                missingPageNumbers=[],
+                selectedPageNumbers=[],
+                orderingStrategy="discovery_order",
+                readerReadinessEnabled=True,
+                overlayDismissEnabled=True,
+                overlayDismissAttempts=0,
+                overlayDismissedCount=0,
+                carouselExplorationEnabled=True,
+                carouselStepsExecuted=0,
+                sequenceLengthBeforeExploration=0,
+                sequenceLengthAfterExploration=0,
+                sequenceStableRounds=0,
+                smartStopEnabled=False,
+                smartStopMinSteps=20,
+                smartStopStableRounds=8,
+                smartStopMinSequenceLength=3,
+                smartStopTriggered=False,
+                smartStopReason="none",
+                readerBoundarySuspected=False,
+                lastSequenceGrowthStep=0,
+                largeSequenceModeEnabled=True,
+                largeSequenceModeTriggered=False,
+                largeSequenceMinLength=20,
+                largeSequenceMaxSteps=1000,
+                largeSequenceStepsExecuted=0,
+                largeSequenceStopReason="none",
+                productiveActions=[],
+                lastProductiveAction="",
+                sequenceGrowthEvents=0,
+                sequenceLengthAtNormalStepLimit=0,
+                autonomousStopReason="duration_elapsed",
+                blockedByOverlaySuspected=False,
+                manualInteractionExpected=False,
+                notes=[],
+            ),
+        )
+
+    monkeypatch.setattr("app.services.batch_jobs.capture_chapter_images", fake_capture)
+
+    create_response = client.post(
+        "/api/chapters/batch",
+        json={
+            "urls": ["https://example.com/chapter-1.html"],
+            "analysisMode": "autonomous_capture",
+            "durationSeconds": 45,
+            "stopPolicy": "duration",
+        },
+    )
+    status_payload = _wait_for_batch_completion(create_response.json()["jobId"])
+
+    assert observed["call"] == (
+        "https://example.com/chapter-1.html",
+        45,
+        "autonomous",
+        "duration",
+    )
+    assert status_payload["analysisMode"] == "autonomous_capture"
+
+
+def test_batch_accepts_smart_stop_policy(monkeypatch, tmp_path) -> None:
+    from app.schemas import ChapterCaptureDiagnostics, ChapterCaptureResponse
+
+    monkeypatch.setenv("URL_ACCESS_MODE", "open")
+    monkeypatch.setenv("BATCH_REPORT_BASE_DIR", str(tmp_path / "batches"))
+    observed = {}
+
+    async def fake_capture(url: str, duration: int, capture_mode: str, stop_policy: str):
+        observed["call"] = (url, duration, capture_mode, stop_policy)
+        return ChapterCaptureResponse(
+            sourceUrl=url,
+            captureDurationSeconds=duration,
+            imageCount=0,
+            images=[],
+            diagnostics=ChapterCaptureDiagnostics(
+                browserRendered=True,
+                captureMode="autonomous",
+                networkImageCount=0,
+                domImageCount=0,
+                deduplicatedCount=0,
+                browserHeadless=True,
+                browserPersistentContextEnabled=False,
+                browserUserDataDirConfigured=False,
+                browserSessionMode="ephemeral",
+                captureStopPolicy="smart",
+                captureRequestedDurationSeconds=duration,
+                captureActualDurationSeconds=10.0,
+                stoppedBecauseSequenceStable=True,
+                autonomousModeEnabled=True,
+                autonomousStepsExecuted=4,
+                autonomousActionsUsed=[],
+                imageCountBeforeAutonomousActions=0,
+                imageCountAfterAutonomousActions=0,
+                imageCountStableRounds=2,
+                observedImageCount=0,
+                selectedImageCount=0,
+                excludedImageCount=0,
+                selectionStrategy="discovery_order",
+                dominantSequenceDetected=False,
+                dominantSequenceLength=0,
+                numericOrderingApplied=False,
+                duplicatePageNumberCount=0,
+                missingPageNumbers=[],
+                selectedPageNumbers=[],
+                orderingStrategy="discovery_order",
+                readerReadinessEnabled=True,
+                overlayDismissEnabled=True,
+                overlayDismissAttempts=0,
+                overlayDismissedCount=0,
+                carouselExplorationEnabled=True,
+                carouselStepsExecuted=0,
+                sequenceLengthBeforeExploration=0,
+                sequenceLengthAfterExploration=0,
+                sequenceStableRounds=2,
+                smartStopEnabled=True,
+                smartStopMinSteps=20,
+                smartStopStableRounds=8,
+                smartStopMinSequenceLength=3,
+                smartStopTriggered=True,
+                smartStopReason="smart_sequence_complete",
+                readerBoundarySuspected=False,
+                lastSequenceGrowthStep=4,
+                largeSequenceModeEnabled=True,
+                largeSequenceModeTriggered=False,
+                largeSequenceMinLength=20,
+                largeSequenceMaxSteps=1000,
+                largeSequenceStepsExecuted=0,
+                largeSequenceStopReason="none",
+                productiveActions=[],
+                lastProductiveAction="",
+                sequenceGrowthEvents=0,
+                sequenceLengthAtNormalStepLimit=0,
+                autonomousStopReason="smart_sequence_complete",
+                blockedByOverlaySuspected=False,
+                manualInteractionExpected=False,
+                notes=[],
+            ),
+        )
+
+    monkeypatch.setattr("app.services.batch_jobs.capture_chapter_images", fake_capture)
+
+    create_response = client.post(
+        "/api/chapters/batch",
+        json={
+            "urls": ["https://example.com/chapter-1.html"],
+            "analysisMode": "autonomous_capture",
+            "durationSeconds": 120,
+            "stopPolicy": "smart",
+        },
+    )
+    status_payload = _wait_for_batch_completion(create_response.json()["jobId"])
+
+    assert observed["call"] == (
+        "https://example.com/chapter-1.html",
+        120,
+        "autonomous",
+        "smart",
+    )
+    assert status_payload["items"][0]["result"]["diagnostics"]["captureStopPolicy"] == "smart"
+
+
+def test_batch_item_failure_does_not_stop_next_item(monkeypatch, tmp_path) -> None:
+    from app.schemas import ChapterImagePreview, ChapterPreviewDiagnostics, ChapterPreviewResponse
+
+    monkeypatch.setenv("URL_ACCESS_MODE", "open")
+    monkeypatch.setenv("BATCH_REPORT_BASE_DIR", str(tmp_path / "batches"))
+
+    async def fake_preview(url: str, render_mode: str = "static"):
+        if url.endswith("chapter-1.html"):
+            raise TargetFetchError("Target page could not be reached.", 502)
+        return ChapterPreviewResponse(
+            sourceUrl=url,
+            imageCount=1,
+            images=[
+                ChapterImagePreview(
+                    index=1,
+                    url="https://example.com/images/01.jpg",
+                    filename="001.jpg",
+                )
+            ],
+            diagnostics=ChapterPreviewDiagnostics(
+                htmlLength=10,
+                imgTagCount=1,
+                imagesFromSrc=1,
+                imagesFromDataSrc=0,
+                imagesFromDataLazySrc=0,
+                imagesFromDataOriginal=0,
+                imagesFromDataUrl=0,
+                imagesFromSrcset=0,
+                imagesFromSourceSrcset=0,
+                imagesFromMeta=0,
+                jsonScriptCount=0,
+                embeddedImageUrlCount=0,
+                imagesFromEmbeddedJson=0,
+                deduplicatedCount=0,
+                looksDynamic=False,
+                hasAppRootShell=False,
+                possibleApiDrivenPage=False,
+                renderModeUsed=render_mode,
+                browserRendered=False,
+                domImageCount=0,
+                browserFilteredImageCount=0,
+                browserHeadless=True,
+                browserPersistentContextEnabled=False,
+                browserUserDataDirConfigured=False,
+                browserSessionMode="ephemeral",
+                browserScrollEnabled=False,
+                browserScrollSteps=0,
+                browserScrollHeightBefore=0,
+                browserScrollHeightAfter=0,
+                browserLazyLoadWaitMs=0,
+                browserScrollableContainerCount=0,
+                browserScrolledContainerCount=0,
+                browserMouseWheelSteps=0,
+                browserImageCountBeforeScroll=0,
+                browserImageCountAfterScroll=0,
+                browserImageCountStableRounds=0,
+                browserScrollStrategy="none",
+                browserExtractionNotes=[],
+                notes=[],
+            ),
+        )
+
+    monkeypatch.setattr("app.services.batch_jobs.build_chapter_preview", fake_preview)
+
+    create_response = client.post(
+        "/api/chapters/batch",
+        json={
+            "urls": [
+                "https://example.com/chapter-1.html",
+                "https://example.com/chapter-2.html",
+            ],
+            "analysisMode": "static_preview",
+        },
+    )
+    status_payload = _wait_for_batch_completion(create_response.json()["jobId"])
+
+    assert status_payload["status"] == "completed_with_errors"
+    assert status_payload["completedUrls"] == 1
+    assert status_payload["failedUrls"] == 1
+    assert status_payload["items"][0]["status"] == "failed"
+    assert status_payload["items"][0]["error"] == "Target page could not be reached."
+    assert status_payload["items"][1]["status"] == "success"
+
+
+def test_batch_status_returns_job_state_and_report(monkeypatch, tmp_path) -> None:
+    from app.schemas import ChapterImagePreview, ChapterPreviewDiagnostics, ChapterPreviewResponse
+
+    monkeypatch.setenv("URL_ACCESS_MODE", "open")
+    report_base_dir = tmp_path / "batches"
+    monkeypatch.setenv("BATCH_REPORT_BASE_DIR", str(report_base_dir))
+
+    async def fake_preview(url: str, render_mode: str = "static"):
+        return ChapterPreviewResponse(
+            sourceUrl=url,
+            imageCount=1,
+            images=[
+                ChapterImagePreview(
+                    index=1,
+                    url="https://example.com/images/01.jpg",
+                    filename="001.jpg",
+                )
+            ],
+            diagnostics=ChapterPreviewDiagnostics(
+                htmlLength=10,
+                imgTagCount=1,
+                imagesFromSrc=1,
+                imagesFromDataSrc=0,
+                imagesFromDataLazySrc=0,
+                imagesFromDataOriginal=0,
+                imagesFromDataUrl=0,
+                imagesFromSrcset=0,
+                imagesFromSourceSrcset=0,
+                imagesFromMeta=0,
+                jsonScriptCount=0,
+                embeddedImageUrlCount=0,
+                imagesFromEmbeddedJson=0,
+                deduplicatedCount=0,
+                looksDynamic=False,
+                hasAppRootShell=False,
+                possibleApiDrivenPage=False,
+                renderModeUsed=render_mode,
+                browserRendered=False,
+                domImageCount=0,
+                browserFilteredImageCount=0,
+                browserHeadless=True,
+                browserPersistentContextEnabled=False,
+                browserUserDataDirConfigured=False,
+                browserSessionMode="ephemeral",
+                browserScrollEnabled=False,
+                browserScrollSteps=0,
+                browserScrollHeightBefore=0,
+                browserScrollHeightAfter=0,
+                browserLazyLoadWaitMs=0,
+                browserScrollableContainerCount=0,
+                browserScrolledContainerCount=0,
+                browserMouseWheelSteps=0,
+                browserImageCountBeforeScroll=0,
+                browserImageCountAfterScroll=0,
+                browserImageCountStableRounds=0,
+                browserScrollStrategy="none",
+                browserExtractionNotes=[],
+                notes=[],
+            ),
+        )
+
+    monkeypatch.setattr("app.services.batch_jobs.build_chapter_preview", fake_preview)
+
+    create_response = client.post(
+        "/api/chapters/batch",
+        json={
+            "urls": ["https://example.com/chapter-1.html"],
+            "analysisMode": "static_preview",
+        },
+    )
+    create_payload = create_response.json()
+    status_payload = _wait_for_batch_completion(create_payload["jobId"])
+
+    report_path = Path(status_payload["reportPath"])
+    assert status_payload["jobId"] == create_payload["jobId"]
+    assert status_payload["items"][0]["status"] == "success"
+    assert report_path.exists()
+    assert json.loads(report_path.read_text(encoding="utf-8"))["jobId"] == create_payload["jobId"]
+
+
+def test_unknown_batch_job_returns_404() -> None:
+    response = client.get("/api/chapters/batch/does-not-exist")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Batch job was not found."
+
+
+def test_batch_download_unknown_job_returns_404() -> None:
+    response = client.post("/api/chapters/batch/does-not-exist/download")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Batch job was not found."
+
+
+def test_batch_download_no_successful_items_returns_400(monkeypatch) -> None:
+    from app.schemas import ChapterBatchStatusResponse
+
+    monkeypatch.setattr(
+        "app.services.batch_downloader.get_batch_job",
+        lambda job_id: ChapterBatchStatusResponse(
+            jobId=job_id,
+            status="completed_with_errors",
+            analysisMode="autonomous_capture",
+            totalUrls=1,
+            completedUrls=0,
+            failedUrls=1,
+            createdAt="2026-01-01T00:00:00Z",
+            startedAt="2026-01-01T00:00:01Z",
+            finishedAt="2026-01-01T00:00:02Z",
+            durationMs=1000,
+            items=[
+                {
+                    "index": 1,
+                    "url": "https://example.com/chapter-1.html",
+                    "status": "failed",
+                    "imageCount": 0,
+                    "startedAt": None,
+                    "finishedAt": None,
+                    "durationMs": None,
+                    "error": "boom",
+                    "result": None,
+                }
+            ],
+            reportPath="downloads/batches/test/batch-report.json",
+        ),
+    )
+
+    response = client.post("/api/chapters/batch/test-job/download")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Batch job has no successful items to download."
+
+
+def test_batch_download_uses_existing_result_images_without_rerunning_analysis(
+    monkeypatch, tmp_path
+) -> None:
+    from app.schemas import ChapterBatchStatusResponse
+
+    monkeypatch.setenv("URL_ACCESS_MODE", "open")
+    monkeypatch.setenv("BATCH_DOWNLOAD_BASE_DIR", str(tmp_path / "batch-downloads"))
+
+    monkeypatch.setattr(
+        "app.services.batch_downloader.get_batch_job",
+        lambda job_id: ChapterBatchStatusResponse(
+            jobId=job_id,
+            status="completed",
+            analysisMode="autonomous_capture",
+            totalUrls=1,
+            completedUrls=1,
+            failedUrls=0,
+            createdAt="2026-01-01T00:00:00Z",
+            startedAt="2026-01-01T00:00:01Z",
+            finishedAt="2026-01-01T00:00:02Z",
+            durationMs=1000,
+            items=[
+                {
+                    "index": 1,
+                    "url": "https://example.com/library/the-beginning-after-the-end/chapter-236",
+                    "status": "success",
+                    "imageCount": 2,
+                    "startedAt": None,
+                    "finishedAt": None,
+                    "durationMs": None,
+                    "error": None,
+                    "result": {
+                        "images": [
+                            {
+                                "index": 1,
+                                "url": "https://cdn.example.com/001.webp",
+                                "filename": "001.webp",
+                                "source": "network",
+                            },
+                            {
+                                "index": 2,
+                                "url": "https://cdn.example.com/002.webp",
+                                "filename": "002.webp",
+                                "source": "network",
+                            },
+                        ]
+                    },
+                }
+            ],
+            reportPath="downloads/batches/test/batch-report.json",
+        ),
+    )
+
+    async def fake_fetch_bytes(url: str) -> bytes:
+        return f"payload:{url}".encode()
+
+    monkeypatch.setattr("app.services.batch_downloader.fetch_bytes", fake_fetch_bytes)
+
+    response = client.post("/api/chapters/batch/test-job/download")
+
+    assert response.status_code == 200
+    payload = response.json()
+    folder = Path(payload["items"][0]["folder"])
+    assert payload["jobId"] == "test-job"
+    assert payload["totalImages"] == 2
+    assert payload["downloadedImages"] == 2
+    assert payload["failedImages"] == 0
+    assert folder.name == "Chapter 236"
+    assert folder.parent.name == "The Beginning After The End"
+    assert (folder / "001.webp").read_bytes() == b"payload:https://cdn.example.com/001.webp"
+    assert (folder / "002.webp").read_bytes() == b"payload:https://cdn.example.com/002.webp"
+
+
+def test_batch_download_sanitizes_folder_names() -> None:
+    from app.services.batch_downloader import infer_batch_download_folder
+
+    folder = infer_batch_download_folder(
+        Path("downloads/batch-downloads"),
+        "https://example.com/series/my:unsafe<title>/chapter-09..",
+    )
+
+    assert folder.parent.name == "My Unsafe Title"
+    assert folder.name == "Chapter 9"
+
+
+def test_batch_download_preserves_decimal_chapter_numbers() -> None:
+    from app.services.batch_downloader import infer_batch_download_folder
+
+    folder = infer_batch_download_folder(
+        Path("downloads/batch-downloads"),
+        "https://example.com/title/m7gm-dreaming-freedom/8202664-chapter-184.5",
+    )
+
+    assert folder.parent.name == "Dreaming Freedom"
+    assert folder.name == "Chapter 184.5"
+
+
+def test_batch_download_chapter_slug_without_numeric_prefix_uses_decimal() -> None:
+    from app.services.batch_downloader import infer_batch_download_folder
+
+    folder = infer_batch_download_folder(
+        Path("downloads/batch-downloads"),
+        "https://example.com/library/dreaming-freedom/chapter-184.5",
+    )
+
+    assert folder.parent.name == "Dreaming Freedom"
+    assert folder.name == "Chapter 184.5"
+
+
+def test_batch_download_unknown_url_still_falls_back_safely() -> None:
+    from app.services.batch_downloader import infer_batch_download_folder
+
+    folder = infer_batch_download_folder(
+        Path("downloads/batch-downloads"),
+        "https://example.com",
+    )
+
+    assert folder.parent.name == "example.com"
+    assert folder.name == "Root"
+
+
+def test_batch_download_preserves_existing_filenames(monkeypatch, tmp_path) -> None:
+    from app.schemas import ChapterBatchStatusResponse
+
+    monkeypatch.setenv("URL_ACCESS_MODE", "open")
+    monkeypatch.setenv("BATCH_DOWNLOAD_BASE_DIR", str(tmp_path / "batch-downloads"))
+    monkeypatch.setattr(
+        "app.services.batch_downloader.get_batch_job",
+        lambda job_id: ChapterBatchStatusResponse(
+            jobId=job_id,
+            status="completed",
+            analysisMode="autonomous_capture",
+            totalUrls=1,
+            completedUrls=1,
+            failedUrls=0,
+            createdAt="2026-01-01T00:00:00Z",
+            startedAt=None,
+            finishedAt=None,
+            durationMs=None,
+            items=[
+                {
+                    "index": 1,
+                    "url": "https://example.com/title/book-one/chapter-5",
+                    "status": "success",
+                    "imageCount": 2,
+                    "startedAt": None,
+                    "finishedAt": None,
+                    "durationMs": None,
+                    "error": None,
+                    "result": {
+                        "images": [
+                            {"index": 1, "url": "https://cdn.example.com/a.webp", "filename": "001.webp", "source": "network"},
+                            {"index": 2, "url": "https://cdn.example.com/b.webp", "filename": "002.webp", "source": "network"},
+                        ]
+                    },
+                }
+            ],
+            reportPath="downloads/batches/test/batch-report.json",
+        ),
+    )
+    async def fake_fetch_bytes(_: str) -> bytes:
+        return b"x"
+
+    monkeypatch.setattr("app.services.batch_downloader.fetch_bytes", fake_fetch_bytes)
+
+    response = client.post("/api/chapters/batch/test-job/download")
+
+    assert response.status_code == 200
+    folder = Path(response.json()["items"][0]["folder"])
+    assert sorted(item.name for item in folder.iterdir()) == ["001.webp", "002.webp"]
+
+
+def test_batch_download_failed_image_does_not_stop_other_images(monkeypatch, tmp_path) -> None:
+    from app.schemas import ChapterBatchStatusResponse
+
+    monkeypatch.setenv("URL_ACCESS_MODE", "open")
+    monkeypatch.setenv("BATCH_DOWNLOAD_BASE_DIR", str(tmp_path / "batch-downloads"))
+    monkeypatch.setattr(
+        "app.services.batch_downloader.get_batch_job",
+        lambda job_id: ChapterBatchStatusResponse(
+            jobId=job_id,
+            status="completed",
+            analysisMode="autonomous_capture",
+            totalUrls=1,
+            completedUrls=1,
+            failedUrls=0,
+            createdAt="2026-01-01T00:00:00Z",
+            startedAt=None,
+            finishedAt=None,
+            durationMs=None,
+            items=[
+                {
+                    "index": 1,
+                    "url": "https://example.com/series/demo/chapter-7",
+                    "status": "success",
+                    "imageCount": 3,
+                    "startedAt": None,
+                    "finishedAt": None,
+                    "durationMs": None,
+                    "error": None,
+                    "result": {
+                        "images": [
+                            {"index": 1, "url": "https://cdn.example.com/1.webp", "filename": "001.webp", "source": "network"},
+                            {"index": 2, "url": "https://cdn.example.com/2.webp", "filename": "002.webp", "source": "network"},
+                            {"index": 3, "url": "https://cdn.example.com/3.webp", "filename": "003.webp", "source": "network"},
+                        ]
+                    },
+                }
+            ],
+            reportPath="downloads/batches/test/batch-report.json",
+        ),
+    )
+
+    async def fake_fetch_bytes(url: str) -> bytes:
+        if url.endswith("/2.webp"):
+            raise TargetFetchError("Target page could not be reached.", 502)
+        return b"ok"
+
+    monkeypatch.setattr("app.services.batch_downloader.fetch_bytes", fake_fetch_bytes)
+
+    response = client.post("/api/chapters/batch/test-job/download")
+
+    assert response.status_code == 200
+    payload = response.json()
+    folder = Path(payload["items"][0]["folder"])
+    assert payload["status"] == "completed_with_errors"
+    assert payload["downloadedImages"] == 2
+    assert payload["failedImages"] == 1
+    assert (folder / "001.webp").exists()
+    assert not (folder / "002.webp").exists()
+    assert (folder / "003.webp").exists()
+
+
+def test_batch_download_report_is_written(monkeypatch, tmp_path) -> None:
+    from app.schemas import ChapterBatchStatusResponse
+
+    monkeypatch.setenv("URL_ACCESS_MODE", "open")
+    monkeypatch.setenv("BATCH_DOWNLOAD_BASE_DIR", str(tmp_path / "batch-downloads"))
+    monkeypatch.setattr(
+        "app.services.batch_downloader.get_batch_job",
+        lambda job_id: ChapterBatchStatusResponse(
+            jobId=job_id,
+            status="completed",
+            analysisMode="autonomous_capture",
+            totalUrls=1,
+            completedUrls=1,
+            failedUrls=0,
+            createdAt="2026-01-01T00:00:00Z",
+            startedAt=None,
+            finishedAt=None,
+            durationMs=None,
+            items=[
+                {
+                    "index": 1,
+                    "url": "https://example.com/series/demo/chapter-7",
+                    "status": "success",
+                    "imageCount": 1,
+                    "startedAt": None,
+                    "finishedAt": None,
+                    "durationMs": None,
+                    "error": None,
+                    "result": {
+                        "images": [
+                            {"index": 1, "url": "https://cdn.example.com/1.webp", "filename": "001.webp", "source": "network"},
+                        ]
+                    },
+                }
+            ],
+            reportPath="downloads/batches/test/batch-report.json",
+        ),
+    )
+    async def fake_fetch_bytes(_: str) -> bytes:
+        return b"ok"
+
+    monkeypatch.setattr("app.services.batch_downloader.fetch_bytes", fake_fetch_bytes)
+
+    response = client.post("/api/chapters/batch/test-job/download")
+
+    assert response.status_code == 200
+    report_path = Path(response.json()["reportPath"])
+    assert report_path.exists()
+    report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report_payload["jobId"] == "test-job"
+    assert report_payload["downloadedImages"] == 1
+
+
+def test_batch_item_download_endpoint_exists(monkeypatch, tmp_path) -> None:
+    from app.schemas import ChapterBatchStatusResponse
+
+    monkeypatch.setenv("URL_ACCESS_MODE", "open")
+    monkeypatch.setenv("BATCH_DOWNLOAD_BASE_DIR", str(tmp_path / "batch-downloads"))
+    monkeypatch.setattr(
+        "app.services.batch_downloader.get_batch_job",
+        lambda job_id: ChapterBatchStatusResponse(
+            jobId=job_id,
+            status="completed",
+            analysisMode="autonomous_capture",
+            totalUrls=1,
+            completedUrls=1,
+            failedUrls=0,
+            createdAt="2026-01-01T00:00:00Z",
+            startedAt=None,
+            finishedAt=None,
+            durationMs=None,
+            items=[
+                {
+                    "index": 1,
+                    "url": "https://example.com/series/demo/chapter-7",
+                    "status": "success",
+                    "imageCount": 1,
+                    "startedAt": None,
+                    "finishedAt": None,
+                    "durationMs": None,
+                    "error": None,
+                    "result": {
+                        "images": [
+                            {"index": 1, "url": "https://cdn.example.com/1.webp", "filename": "001.webp", "source": "network"},
+                        ]
+                    },
+                }
+            ],
+            reportPath="downloads/batches/test/batch-report.json",
+        ),
+    )
+    async def fake_fetch_bytes(_: str) -> bytes:
+        return b"ok"
+
+    monkeypatch.setattr("app.services.batch_downloader.fetch_bytes", fake_fetch_bytes)
+
+    response = client.post("/api/chapters/batch/test-job/items/1/download")
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["index"] == 1
 
 
 def test_browser_dom_extraction_prefers_likely_chapter_images_and_preserves_order() -> None:
