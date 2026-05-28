@@ -142,6 +142,15 @@ class ChapterCaptureDiagnostics(BaseModel):
     largeSequenceMaxSteps: int
     largeSequenceStepsExecuted: int
     largeSequenceStopReason: str
+    sustainedArrowDownEnabled: bool
+    sustainedArrowDownRoundsExecuted: int
+    sustainedArrowDownPressesSent: int
+    sustainedArrowDownSequenceBefore: int
+    sustainedArrowDownSequenceAfter: int
+    sustainedArrowDownGrowthEvents: int
+    sustainedArrowDownStableRounds: int
+    sustainedArrowDownStopReason: str
+    sustainedArrowDownProductive: bool
     productiveActions: list[str]
     lastProductiveAction: str
     sequenceGrowthEvents: int

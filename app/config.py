@@ -68,6 +68,12 @@ class Settings:
     browser_large_sequence_step_wait_ms: int
     browser_large_sequence_extend_while_growing: bool
     browser_large_sequence_stable_rounds: int
+    browser_sustained_arrow_down_enabled: bool
+    browser_sustained_arrow_down_rounds: int
+    browser_sustained_arrow_down_presses_per_round: int
+    browser_sustained_arrow_down_press_delay_ms: int
+    browser_sustained_arrow_down_round_wait_ms: int
+    browser_sustained_arrow_down_stable_rounds: int
     batch_max_urls: int
     batch_report_base_dir: str
     batch_download_base_dir: str
@@ -222,6 +228,30 @@ def get_settings() -> Settings:
         "BROWSER_LARGE_SEQUENCE_STABLE_ROUNDS",
         "25",
     ).strip()
+    browser_sustained_arrow_down_enabled = _parse_bool(
+        os.getenv("BROWSER_SUSTAINED_ARROW_DOWN_ENABLED", "true"),
+        True,
+    )
+    sustained_arrow_down_rounds_raw = os.getenv(
+        "BROWSER_SUSTAINED_ARROW_DOWN_ROUNDS",
+        "120",
+    ).strip()
+    sustained_arrow_down_presses_per_round_raw = os.getenv(
+        "BROWSER_SUSTAINED_ARROW_DOWN_PRESSES_PER_ROUND",
+        "10",
+    ).strip()
+    sustained_arrow_down_press_delay_ms_raw = os.getenv(
+        "BROWSER_SUSTAINED_ARROW_DOWN_PRESS_DELAY_MS",
+        "40",
+    ).strip()
+    sustained_arrow_down_round_wait_ms_raw = os.getenv(
+        "BROWSER_SUSTAINED_ARROW_DOWN_ROUND_WAIT_MS",
+        "250",
+    ).strip()
+    sustained_arrow_down_stable_rounds_raw = os.getenv(
+        "BROWSER_SUSTAINED_ARROW_DOWN_STABLE_ROUNDS",
+        "20",
+    ).strip()
     batch_max_urls_raw = os.getenv("BATCH_MAX_URLS", "20").strip()
     batch_report_base_dir = (
         os.getenv("BATCH_REPORT_BASE_DIR", "downloads/batches").strip()
@@ -336,6 +366,34 @@ def get_settings() -> Settings:
     except ValueError:
         browser_large_sequence_stable_rounds = 25
     try:
+        browser_sustained_arrow_down_rounds = int(sustained_arrow_down_rounds_raw)
+    except ValueError:
+        browser_sustained_arrow_down_rounds = 120
+    try:
+        browser_sustained_arrow_down_presses_per_round = int(
+            sustained_arrow_down_presses_per_round_raw
+        )
+    except ValueError:
+        browser_sustained_arrow_down_presses_per_round = 10
+    try:
+        browser_sustained_arrow_down_press_delay_ms = int(
+            sustained_arrow_down_press_delay_ms_raw
+        )
+    except ValueError:
+        browser_sustained_arrow_down_press_delay_ms = 40
+    try:
+        browser_sustained_arrow_down_round_wait_ms = int(
+            sustained_arrow_down_round_wait_ms_raw
+        )
+    except ValueError:
+        browser_sustained_arrow_down_round_wait_ms = 250
+    try:
+        browser_sustained_arrow_down_stable_rounds = int(
+            sustained_arrow_down_stable_rounds_raw
+        )
+    except ValueError:
+        browser_sustained_arrow_down_stable_rounds = 20
+    try:
         batch_max_urls = int(batch_max_urls_raw)
     except ValueError:
         batch_max_urls = 20
@@ -390,6 +448,16 @@ def get_settings() -> Settings:
         browser_large_sequence_step_wait_ms = 250
     if browser_large_sequence_stable_rounds < 1:
         browser_large_sequence_stable_rounds = 25
+    if browser_sustained_arrow_down_rounds < 1:
+        browser_sustained_arrow_down_rounds = 120
+    if browser_sustained_arrow_down_presses_per_round < 1:
+        browser_sustained_arrow_down_presses_per_round = 10
+    if browser_sustained_arrow_down_press_delay_ms < 0:
+        browser_sustained_arrow_down_press_delay_ms = 40
+    if browser_sustained_arrow_down_round_wait_ms < 0:
+        browser_sustained_arrow_down_round_wait_ms = 250
+    if browser_sustained_arrow_down_stable_rounds < 1:
+        browser_sustained_arrow_down_stable_rounds = 20
     if batch_max_urls <= 0:
         batch_max_urls = 20
 
@@ -441,6 +509,12 @@ def get_settings() -> Settings:
         browser_large_sequence_step_wait_ms=browser_large_sequence_step_wait_ms,
         browser_large_sequence_extend_while_growing=browser_large_sequence_extend_while_growing,
         browser_large_sequence_stable_rounds=browser_large_sequence_stable_rounds,
+        browser_sustained_arrow_down_enabled=browser_sustained_arrow_down_enabled,
+        browser_sustained_arrow_down_rounds=browser_sustained_arrow_down_rounds,
+        browser_sustained_arrow_down_presses_per_round=browser_sustained_arrow_down_presses_per_round,
+        browser_sustained_arrow_down_press_delay_ms=browser_sustained_arrow_down_press_delay_ms,
+        browser_sustained_arrow_down_round_wait_ms=browser_sustained_arrow_down_round_wait_ms,
+        browser_sustained_arrow_down_stable_rounds=browser_sustained_arrow_down_stable_rounds,
         batch_max_urls=batch_max_urls,
         batch_report_base_dir=batch_report_base_dir,
         batch_download_base_dir=batch_download_base_dir,

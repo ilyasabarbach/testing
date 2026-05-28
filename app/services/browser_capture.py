@@ -77,6 +77,12 @@ async def capture_chapter_images(
         large_sequence_step_wait_ms=settings.browser_large_sequence_step_wait_ms,
         large_sequence_extend_while_growing=settings.browser_large_sequence_extend_while_growing,
         large_sequence_stable_rounds=settings.browser_large_sequence_stable_rounds,
+        sustained_arrow_down_enabled=settings.browser_sustained_arrow_down_enabled,
+        sustained_arrow_down_rounds=settings.browser_sustained_arrow_down_rounds,
+        sustained_arrow_down_presses_per_round=settings.browser_sustained_arrow_down_presses_per_round,
+        sustained_arrow_down_press_delay_ms=settings.browser_sustained_arrow_down_press_delay_ms,
+        sustained_arrow_down_round_wait_ms=settings.browser_sustained_arrow_down_round_wait_ms,
+        sustained_arrow_down_stable_rounds=settings.browser_sustained_arrow_down_stable_rounds,
     )
     payload = await asyncio.to_thread(
         run_capture_worker,
@@ -218,6 +224,33 @@ async def capture_chapter_images(
             ),
             largeSequenceStopReason=str(
                 payload.get("largeSequenceStopReason", "none")
+            ),
+            sustainedArrowDownEnabled=bool(
+                payload.get("sustainedArrowDownEnabled", False)
+            ),
+            sustainedArrowDownRoundsExecuted=int(
+                payload.get("sustainedArrowDownRoundsExecuted", 0)
+            ),
+            sustainedArrowDownPressesSent=int(
+                payload.get("sustainedArrowDownPressesSent", 0)
+            ),
+            sustainedArrowDownSequenceBefore=int(
+                payload.get("sustainedArrowDownSequenceBefore", 0)
+            ),
+            sustainedArrowDownSequenceAfter=int(
+                payload.get("sustainedArrowDownSequenceAfter", 0)
+            ),
+            sustainedArrowDownGrowthEvents=int(
+                payload.get("sustainedArrowDownGrowthEvents", 0)
+            ),
+            sustainedArrowDownStableRounds=int(
+                payload.get("sustainedArrowDownStableRounds", 0)
+            ),
+            sustainedArrowDownStopReason=str(
+                payload.get("sustainedArrowDownStopReason", "none")
+            ),
+            sustainedArrowDownProductive=bool(
+                payload.get("sustainedArrowDownProductive", False)
             ),
             productiveActions=list(payload.get("productiveActions", [])),
             lastProductiveAction=str(payload.get("lastProductiveAction", "")),
@@ -406,6 +439,12 @@ def build_capture_worker_command(
     large_sequence_step_wait_ms: int,
     large_sequence_extend_while_growing: bool,
     large_sequence_stable_rounds: int,
+    sustained_arrow_down_enabled: bool,
+    sustained_arrow_down_rounds: int,
+    sustained_arrow_down_presses_per_round: int,
+    sustained_arrow_down_press_delay_ms: int,
+    sustained_arrow_down_round_wait_ms: int,
+    sustained_arrow_down_stable_rounds: int,
 ) -> list[str]:
     if browser_executable_path:
         executable_path = Path(browser_executable_path)
@@ -480,6 +519,18 @@ def build_capture_worker_command(
         "true" if large_sequence_extend_while_growing else "false",
         "--large-sequence-stable-rounds",
         str(large_sequence_stable_rounds),
+        "--sustained-arrow-down-enabled",
+        "true" if sustained_arrow_down_enabled else "false",
+        "--sustained-arrow-down-rounds",
+        str(sustained_arrow_down_rounds),
+        "--sustained-arrow-down-presses-per-round",
+        str(sustained_arrow_down_presses_per_round),
+        "--sustained-arrow-down-press-delay-ms",
+        str(sustained_arrow_down_press_delay_ms),
+        "--sustained-arrow-down-round-wait-ms",
+        str(sustained_arrow_down_round_wait_ms),
+        "--sustained-arrow-down-stable-rounds",
+        str(sustained_arrow_down_stable_rounds),
     ]
     if browser_executable_path:
         command.extend(["--browser-executable-path", browser_executable_path])

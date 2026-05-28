@@ -280,6 +280,12 @@ def test_reader_readiness_config_defaults(monkeypatch) -> None:
     assert settings.browser_large_sequence_step_wait_ms == 250
     assert settings.browser_large_sequence_extend_while_growing is True
     assert settings.browser_large_sequence_stable_rounds == 25
+    assert settings.browser_sustained_arrow_down_enabled is True
+    assert settings.browser_sustained_arrow_down_rounds == 120
+    assert settings.browser_sustained_arrow_down_presses_per_round == 10
+    assert settings.browser_sustained_arrow_down_press_delay_ms == 40
+    assert settings.browser_sustained_arrow_down_round_wait_ms == 250
+    assert settings.browser_sustained_arrow_down_stable_rounds == 20
 
 
 def test_config_reads_reader_readiness_values_from_env(monkeypatch) -> None:
@@ -302,6 +308,12 @@ def test_config_reads_reader_readiness_values_from_env(monkeypatch) -> None:
     monkeypatch.setenv("BROWSER_LARGE_SEQUENCE_STEP_WAIT_MS", "111")
     monkeypatch.setenv("BROWSER_LARGE_SEQUENCE_EXTEND_WHILE_GROWING", "false")
     monkeypatch.setenv("BROWSER_LARGE_SEQUENCE_STABLE_ROUNDS", "14")
+    monkeypatch.setenv("BROWSER_SUSTAINED_ARROW_DOWN_ENABLED", "false")
+    monkeypatch.setenv("BROWSER_SUSTAINED_ARROW_DOWN_ROUNDS", "33")
+    monkeypatch.setenv("BROWSER_SUSTAINED_ARROW_DOWN_PRESSES_PER_ROUND", "4")
+    monkeypatch.setenv("BROWSER_SUSTAINED_ARROW_DOWN_PRESS_DELAY_MS", "12")
+    monkeypatch.setenv("BROWSER_SUSTAINED_ARROW_DOWN_ROUND_WAIT_MS", "99")
+    monkeypatch.setenv("BROWSER_SUSTAINED_ARROW_DOWN_STABLE_ROUNDS", "7")
 
     settings = get_settings()
 
@@ -324,6 +336,12 @@ def test_config_reads_reader_readiness_values_from_env(monkeypatch) -> None:
     assert settings.browser_large_sequence_step_wait_ms == 111
     assert settings.browser_large_sequence_extend_while_growing is False
     assert settings.browser_large_sequence_stable_rounds == 14
+    assert settings.browser_sustained_arrow_down_enabled is False
+    assert settings.browser_sustained_arrow_down_rounds == 33
+    assert settings.browser_sustained_arrow_down_presses_per_round == 4
+    assert settings.browser_sustained_arrow_down_press_delay_ms == 12
+    assert settings.browser_sustained_arrow_down_round_wait_ms == 99
+    assert settings.browser_sustained_arrow_down_stable_rounds == 7
 
 
 def test_root_ui_returns_200() -> None:
@@ -2231,6 +2249,7 @@ def test_duration_policy_does_not_stop_early_on_sequence_stability(monkeypatch) 
         carousel_max_steps=1,
         sequence_stable_rounds=1,
         duration_seconds=3,
+        sustained_arrow_down_enabled="false",
     )
     discovered = []
     seen = set()
@@ -2326,6 +2345,7 @@ def test_smart_policy_stops_before_duration_when_sequence_stabilizes_after_min_s
         smart_stop_stable_rounds=2,
         smart_stop_min_sequence_length=3,
         smart_stop_use_reader_boundary="true",
+        sustained_arrow_down_enabled="false",
     )
     discovered = []
     seen = set()
@@ -2404,6 +2424,7 @@ def test_smart_policy_does_not_stop_before_min_steps(monkeypatch) -> None:
         smart_stop_stable_rounds=2,
         smart_stop_min_sequence_length=3,
         smart_stop_use_reader_boundary="true",
+        sustained_arrow_down_enabled="false",
     )
     discovered = []
     seen = set()
@@ -2487,7 +2508,7 @@ def test_smart_reader_boundary_does_not_trigger_when_sequence_too_small(monkeypa
     )
 
     assert result is None
-    assert diagnostics["readerBoundaryBlockedBecauseSequenceTooSmall"] is True
+    assert diagnostics["readerBoundarySuspected"] is True
 
 
 def test_smart_reader_boundary_does_not_trigger_when_sequence_grew_recently(monkeypatch) -> None:
@@ -2550,6 +2571,342 @@ def test_smart_reader_boundary_does_not_trigger_when_not_stable_enough(monkeypat
 
     assert result is None
     assert diagnostics["readerBoundaryBlockedBecauseNotStableEnough"] is True
+
+
+def test_sustained_arrow_down_phase_sends_repeated_key_presses_and_marks_growth_productive(monkeypatch) -> None:
+    import app.services.browser_capture_worker as worker
+
+    class FakeKeyboard:
+        def __init__(self):
+            self.presses = []
+
+        def press(self, key: str) -> None:
+            self.presses.append(key)
+
+    class FakePage:
+        def __init__(self):
+            self.keyboard = FakeKeyboard()
+
+        def evaluate(self, script: str):
+            return None
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            return None
+
+    page = FakePage()
+    sequence_rounds = [
+        ["https://example.com/pages/01.webp"],
+        ["https://example.com/pages/01.webp", "https://example.com/pages/02.webp"],
+        ["https://example.com/pages/01.webp", "https://example.com/pages/02.webp", "https://example.com/pages/03.webp"],
+    ]
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._scan_dom_image_urls",
+        lambda page: sequence_rounds.pop(0) if sequence_rounds else [
+            "https://example.com/pages/01.webp",
+            "https://example.com/pages/02.webp",
+            "https://example.com/pages/03.webp",
+        ],
+    )
+    ticks = iter(range(100))
+    monkeypatch.setattr("app.services.browser_capture_worker.time.monotonic", lambda: next(ticks))
+
+    args = SimpleNamespace(
+        capture_mode="autonomous",
+        autonomous_enabled="true",
+        reader_readiness_enabled="true",
+        overlay_dismiss_enabled="true",
+        carousel_exploration_enabled="true",
+        stop_policy="smart",
+        smart_stop_min_steps=1,
+        smart_stop_stable_rounds=2,
+        smart_stop_min_sequence_length=3,
+        smart_stop_reader_boundary_min_sequence_length=20,
+        smart_stop_reader_boundary_recent_growth_window=20,
+        smart_stop_reader_boundary_stable_rounds=10,
+        large_sequence_mode_enabled="true",
+        large_sequence_min_length=20,
+        large_sequence_max_steps=1000,
+        large_sequence_stable_rounds=25,
+        sustained_arrow_down_enabled="true",
+        sustained_arrow_down_rounds=3,
+        sustained_arrow_down_presses_per_round=4,
+        sustained_arrow_down_press_delay_ms=0,
+        sustained_arrow_down_round_wait_ms=0,
+        sustained_arrow_down_stable_rounds=2,
+    )
+    diagnostics = worker._default_autonomous_diagnostics(args, 0)
+    discovered = []
+    seen = set()
+
+    def add_image(url: str, source: str) -> None:
+        if url in seen:
+            return
+        seen.add(url)
+        discovered.append({"url": url, "source": source})
+
+    diagnostics, productive_action_counts, *_ = worker._run_sustained_arrow_down_phase(
+        page=page,
+        args=args,
+        add_image=add_image,
+        discovered=discovered,
+        deadline=999,
+        diagnostics=diagnostics,
+        productive_action_counts={},
+        get_network_image_count=lambda: 0,
+        last_network_image_count=0,
+    )
+
+    assert page.keyboard.presses.count("ArrowDown") == 12
+    assert diagnostics["sustainedArrowDownRoundsExecuted"] == 3
+    assert diagnostics["sustainedArrowDownGrowthEvents"] >= 1
+    assert diagnostics["sustainedArrowDownProductive"] is True
+    assert diagnostics["lastProductiveAction"] == "sustained_arrow_down"
+    assert productive_action_counts["sustained_arrow_down"] >= 1
+
+
+def test_sustained_arrow_down_phase_stops_after_stable_rounds(monkeypatch) -> None:
+    import app.services.browser_capture_worker as worker
+
+    class FakeKeyboard:
+        def press(self, key: str) -> None:
+            return None
+
+    class FakePage:
+        def __init__(self):
+            self.keyboard = FakeKeyboard()
+
+        def evaluate(self, script: str):
+            return None
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._scan_dom_image_urls",
+        lambda page: ["https://example.com/pages/01.webp"],
+    )
+    ticks = iter(range(100))
+    monkeypatch.setattr("app.services.browser_capture_worker.time.monotonic", lambda: next(ticks))
+
+    args = SimpleNamespace(
+        capture_mode="autonomous",
+        autonomous_enabled="true",
+        reader_readiness_enabled="true",
+        overlay_dismiss_enabled="true",
+        carousel_exploration_enabled="true",
+        stop_policy="smart",
+        smart_stop_min_steps=1,
+        smart_stop_stable_rounds=2,
+        smart_stop_min_sequence_length=3,
+        smart_stop_reader_boundary_min_sequence_length=20,
+        smart_stop_reader_boundary_recent_growth_window=20,
+        smart_stop_reader_boundary_stable_rounds=10,
+        large_sequence_mode_enabled="true",
+        large_sequence_min_length=20,
+        large_sequence_max_steps=1000,
+        large_sequence_stable_rounds=25,
+        sustained_arrow_down_enabled="true",
+        sustained_arrow_down_rounds=10,
+        sustained_arrow_down_presses_per_round=2,
+        sustained_arrow_down_press_delay_ms=0,
+        sustained_arrow_down_round_wait_ms=0,
+        sustained_arrow_down_stable_rounds=2,
+    )
+    diagnostics = worker._default_autonomous_diagnostics(args, 0)
+    discovered = []
+    seen = set()
+
+    def add_image(url: str, source: str) -> None:
+        if url in seen:
+            return
+        seen.add(url)
+        discovered.append({"url": url, "source": source})
+
+    diagnostics, *_ = worker._run_sustained_arrow_down_phase(
+        page=FakePage(),
+        args=args,
+        add_image=add_image,
+        discovered=discovered,
+        deadline=999,
+        diagnostics=diagnostics,
+        productive_action_counts={},
+        get_network_image_count=lambda: 0,
+        last_network_image_count=0,
+    )
+
+    assert diagnostics["sustainedArrowDownStopReason"] == "stable_rounds_reached"
+    assert diagnostics["sustainedArrowDownStableRounds"] >= 2
+
+
+def test_sustained_arrow_down_phase_respects_max_rounds(monkeypatch) -> None:
+    import app.services.browser_capture_worker as worker
+
+    class FakeKeyboard:
+        def press(self, key: str) -> None:
+            return None
+
+    class FakePage:
+        def __init__(self):
+            self.keyboard = FakeKeyboard()
+
+        def evaluate(self, script: str):
+            return None
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            return None
+
+    sequence_rounds = [
+        ["https://example.com/pages/01.webp"],
+        ["https://example.com/pages/01.webp", "https://example.com/pages/02.webp"],
+        ["https://example.com/pages/01.webp", "https://example.com/pages/02.webp", "https://example.com/pages/03.webp"],
+        ["https://example.com/pages/01.webp", "https://example.com/pages/02.webp", "https://example.com/pages/03.webp", "https://example.com/pages/04.webp"],
+    ]
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._scan_dom_image_urls",
+        lambda page: sequence_rounds.pop(0) if sequence_rounds else [
+            "https://example.com/pages/01.webp",
+            "https://example.com/pages/02.webp",
+            "https://example.com/pages/03.webp",
+            "https://example.com/pages/04.webp",
+        ],
+    )
+    ticks = iter(range(100))
+    monkeypatch.setattr("app.services.browser_capture_worker.time.monotonic", lambda: next(ticks))
+
+    args = SimpleNamespace(
+        capture_mode="autonomous",
+        autonomous_enabled="true",
+        reader_readiness_enabled="true",
+        overlay_dismiss_enabled="true",
+        carousel_exploration_enabled="true",
+        stop_policy="smart",
+        smart_stop_min_steps=1,
+        smart_stop_stable_rounds=2,
+        smart_stop_min_sequence_length=3,
+        smart_stop_reader_boundary_min_sequence_length=20,
+        smart_stop_reader_boundary_recent_growth_window=20,
+        smart_stop_reader_boundary_stable_rounds=10,
+        large_sequence_mode_enabled="true",
+        large_sequence_min_length=20,
+        large_sequence_max_steps=1000,
+        large_sequence_stable_rounds=25,
+        sustained_arrow_down_enabled="true",
+        sustained_arrow_down_rounds=2,
+        sustained_arrow_down_presses_per_round=1,
+        sustained_arrow_down_press_delay_ms=0,
+        sustained_arrow_down_round_wait_ms=0,
+        sustained_arrow_down_stable_rounds=20,
+    )
+    diagnostics = worker._default_autonomous_diagnostics(args, 0)
+    discovered = []
+    seen = set()
+
+    def add_image(url: str, source: str) -> None:
+        if url in seen:
+            return
+        seen.add(url)
+        discovered.append({"url": url, "source": source})
+
+    diagnostics, *_ = worker._run_sustained_arrow_down_phase(
+        page=FakePage(),
+        args=args,
+        add_image=add_image,
+        discovered=discovered,
+        deadline=999,
+        diagnostics=diagnostics,
+        productive_action_counts={},
+        get_network_image_count=lambda: 0,
+        last_network_image_count=0,
+    )
+
+    assert diagnostics["sustainedArrowDownRoundsExecuted"] == 2
+    assert diagnostics["sustainedArrowDownStopReason"] == "max_rounds_reached"
+
+
+def test_smart_reader_boundary_does_not_stop_before_sustained_arrow_down_phase_when_sequence_small(monkeypatch) -> None:
+    import app.services.browser_capture_worker as worker
+
+    class FakeKeyboard:
+        def press(self, key: str) -> None:
+            return None
+
+    class FakeMouse:
+        def wheel(self, dx: int, dy: int) -> None:
+            return None
+
+    class FakePage:
+        def __init__(self):
+            self.keyboard = FakeKeyboard()
+            self.mouse = FakeMouse()
+
+        def evaluate(self, script: str):
+            return None
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._scan_dom_image_urls",
+        lambda page: [f"https://example.com/pages/{index:02d}.webp" for index in range(1, 6)],
+    )
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_reader_boundary",
+        lambda page: True,
+    )
+    ticks = iter(range(200))
+    monkeypatch.setattr("app.services.browser_capture_worker.time.monotonic", lambda: next(ticks))
+
+    args = SimpleNamespace(
+        capture_mode="autonomous",
+        stop_policy="smart",
+        autonomous_enabled="true",
+        autonomous_max_steps=3,
+        autonomous_step_wait_ms=0,
+        autonomous_stable_rounds=5,
+        autonomous_enable_keyboard="true",
+        autonomous_enable_mouse_wheel="true",
+        carousel_exploration_enabled="true",
+        carousel_max_steps=3,
+        sequence_stable_rounds=6,
+        duration_seconds=10,
+        smart_stop_min_steps=1,
+        smart_stop_stable_rounds=2,
+        smart_stop_min_sequence_length=3,
+        smart_stop_use_reader_boundary="true",
+        smart_stop_reader_boundary_min_sequence_length=20,
+        smart_stop_reader_boundary_recent_growth_window=20,
+        smart_stop_reader_boundary_stable_rounds=2,
+        large_sequence_mode_enabled="true",
+        large_sequence_min_length=20,
+        large_sequence_max_steps=1000,
+        large_sequence_step_wait_ms=0,
+        large_sequence_extend_while_growing="true",
+        large_sequence_stable_rounds=25,
+        sustained_arrow_down_enabled="true",
+        sustained_arrow_down_rounds=3,
+        sustained_arrow_down_presses_per_round=2,
+        sustained_arrow_down_press_delay_ms=0,
+        sustained_arrow_down_round_wait_ms=0,
+        sustained_arrow_down_stable_rounds=2,
+    )
+    discovered = []
+    seen = set()
+
+    def add_image(url: str, source: str) -> None:
+        if url in seen:
+            return
+        seen.add(url)
+        discovered.append({"url": url, "source": source})
+
+    diagnostics = worker._run_autonomous_capture(FakePage(), args, add_image, discovered, lambda: 0)
+
+    assert diagnostics["sustainedArrowDownRoundsExecuted"] > 0
+    assert diagnostics["smartStopReason"] != "smart_reader_boundary"
+    assert diagnostics["sustainedArrowDownStopReason"] in {
+        "stable_rounds_reached",
+        "max_rounds_reached",
+        "duration_elapsed",
+    }
 
 
 def test_large_sequence_mode_triggers_after_min_sequence_length(monkeypatch) -> None:
@@ -2666,6 +3023,7 @@ def test_sequence_still_growing_near_normal_max_steps_extends_exploration(monkey
         smart_stop_stable_rounds=50,
         smart_stop_min_sequence_length=2,
         smart_stop_use_reader_boundary="true",
+        sustained_arrow_down_enabled="false",
         large_sequence_mode_enabled="true",
         large_sequence_min_length=2,
         large_sequence_max_steps=6,
@@ -2767,6 +3125,7 @@ def test_productive_action_tracking_prefers_recent_growth_actions(monkeypatch) -
         smart_stop_stable_rounds=50,
         smart_stop_min_sequence_length=2,
         smart_stop_use_reader_boundary="true",
+        sustained_arrow_down_enabled="false",
         large_sequence_mode_enabled="true",
         large_sequence_min_length=2,
         large_sequence_max_steps=6,
@@ -2843,6 +3202,7 @@ def test_large_sequence_mode_stops_after_stable_rounds(monkeypatch) -> None:
         smart_stop_stable_rounds=2,
         smart_stop_min_sequence_length=2,
         smart_stop_use_reader_boundary="true",
+        sustained_arrow_down_enabled="false",
         large_sequence_mode_enabled="true",
         large_sequence_min_length=2,
         large_sequence_max_steps=20,
@@ -2913,6 +3273,7 @@ def test_large_sequence_max_steps_is_hard_cap(monkeypatch) -> None:
         smart_stop_stable_rounds=100,
         smart_stop_min_sequence_length=2,
         smart_stop_use_reader_boundary="true",
+        sustained_arrow_down_enabled="false",
         large_sequence_mode_enabled="true",
         large_sequence_min_length=2,
         large_sequence_max_steps=5,
@@ -3278,6 +3639,15 @@ def test_autonomous_capture_diagnostics_include_reader_fields(monkeypatch) -> No
                     "largeSequenceMaxSteps": 1000,
                     "largeSequenceStepsExecuted": 12,
                     "largeSequenceStopReason": "smart_sequence_complete",
+                    "sustainedArrowDownEnabled": True,
+                    "sustainedArrowDownRoundsExecuted": 8,
+                    "sustainedArrowDownPressesSent": 80,
+                    "sustainedArrowDownSequenceBefore": 1,
+                    "sustainedArrowDownSequenceAfter": 3,
+                    "sustainedArrowDownGrowthEvents": 2,
+                    "sustainedArrowDownStableRounds": 1,
+                    "sustainedArrowDownStopReason": "stable_rounds_reached",
+                    "sustainedArrowDownProductive": True,
                     "productiveActions": ["keyboard_arrowright", "internal_scroll"],
                     "lastProductiveAction": "keyboard_arrowright",
                     "sequenceGrowthEvents": 5,
@@ -3324,6 +3694,13 @@ def test_autonomous_capture_diagnostics_include_reader_fields(monkeypatch) -> No
     assert diagnostics["largeSequenceMaxSteps"] == 1000
     assert diagnostics["largeSequenceStepsExecuted"] == 12
     assert diagnostics["largeSequenceStopReason"] == "smart_sequence_complete"
+    assert diagnostics["sustainedArrowDownEnabled"] is True
+    assert diagnostics["sustainedArrowDownRoundsExecuted"] == 8
+    assert diagnostics["sustainedArrowDownPressesSent"] == 80
+    assert diagnostics["sustainedArrowDownSequenceAfter"] == 3
+    assert diagnostics["sustainedArrowDownGrowthEvents"] == 2
+    assert diagnostics["sustainedArrowDownStopReason"] == "stable_rounds_reached"
+    assert diagnostics["sustainedArrowDownProductive"] is True
     assert diagnostics["productiveActions"] == ["keyboard_arrowright", "internal_scroll"]
     assert diagnostics["lastProductiveAction"] == "keyboard_arrowright"
     assert diagnostics["sequenceGrowthEvents"] == 5
@@ -3679,6 +4056,18 @@ def test_capture_worker_argparse_accepts_large_sequence_args() -> None:
             "true",
             "--large-sequence-stable-rounds",
             "25",
+            "--sustained-arrow-down-enabled",
+            "true",
+            "--sustained-arrow-down-rounds",
+            "120",
+            "--sustained-arrow-down-presses-per-round",
+            "10",
+            "--sustained-arrow-down-press-delay-ms",
+            "40",
+            "--sustained-arrow-down-round-wait-ms",
+            "250",
+            "--sustained-arrow-down-stable-rounds",
+            "20",
         ]
     )
 
@@ -3691,6 +4080,12 @@ def test_capture_worker_argparse_accepts_large_sequence_args() -> None:
     assert args.large_sequence_step_wait_ms == 200
     assert args.large_sequence_extend_while_growing == "true"
     assert args.large_sequence_stable_rounds == 25
+    assert args.sustained_arrow_down_enabled == "true"
+    assert args.sustained_arrow_down_rounds == 120
+    assert args.sustained_arrow_down_presses_per_round == 10
+    assert args.sustained_arrow_down_press_delay_ms == 40
+    assert args.sustained_arrow_down_round_wait_ms == 250
+    assert args.sustained_arrow_down_stable_rounds == 20
 
 
 def test_capture_parent_worker_cli_contract_includes_large_sequence_args(monkeypatch) -> None:
@@ -3737,6 +4132,12 @@ def test_capture_parent_worker_cli_contract_includes_large_sequence_args(monkeyp
         large_sequence_step_wait_ms=200,
         large_sequence_extend_while_growing=True,
         large_sequence_stable_rounds=25,
+        sustained_arrow_down_enabled=True,
+        sustained_arrow_down_rounds=120,
+        sustained_arrow_down_presses_per_round=10,
+        sustained_arrow_down_press_delay_ms=40,
+        sustained_arrow_down_round_wait_ms=250,
+        sustained_arrow_down_stable_rounds=20,
     )
 
     parsed = build_parser().parse_args(command[3:])
@@ -3752,6 +4153,12 @@ def test_capture_parent_worker_cli_contract_includes_large_sequence_args(monkeyp
     assert parsed.large_sequence_step_wait_ms == 200
     assert parsed.large_sequence_extend_while_growing == "true"
     assert parsed.large_sequence_stable_rounds == 25
+    assert parsed.sustained_arrow_down_enabled == "true"
+    assert parsed.sustained_arrow_down_rounds == 120
+    assert parsed.sustained_arrow_down_presses_per_round == 10
+    assert parsed.sustained_arrow_down_press_delay_ms == 40
+    assert parsed.sustained_arrow_down_round_wait_ms == 250
+    assert parsed.sustained_arrow_down_stable_rounds == 20
 
 
 def test_capture_worker_stage_failures_map_to_clean_errors(monkeypatch) -> None:
@@ -3871,6 +4278,15 @@ def test_batch_endpoint_exists_and_uses_default_analysis_mode(
                 largeSequenceMaxSteps=1000,
                 largeSequenceStepsExecuted=0,
                 largeSequenceStopReason="none",
+                sustainedArrowDownEnabled=True,
+                sustainedArrowDownRoundsExecuted=0,
+                sustainedArrowDownPressesSent=0,
+                sustainedArrowDownSequenceBefore=0,
+                sustainedArrowDownSequenceAfter=0,
+                sustainedArrowDownGrowthEvents=0,
+                sustainedArrowDownStableRounds=0,
+                sustainedArrowDownStopReason="none",
+                sustainedArrowDownProductive=False,
                 productiveActions=[],
                 lastProductiveAction="",
                 sequenceGrowthEvents=0,
@@ -4154,6 +4570,15 @@ def test_autonomous_capture_batch_calls_capture_autonomous(monkeypatch, tmp_path
                 largeSequenceMaxSteps=1000,
                 largeSequenceStepsExecuted=0,
                 largeSequenceStopReason="none",
+                sustainedArrowDownEnabled=True,
+                sustainedArrowDownRoundsExecuted=0,
+                sustainedArrowDownPressesSent=0,
+                sustainedArrowDownSequenceBefore=0,
+                sustainedArrowDownSequenceAfter=0,
+                sustainedArrowDownGrowthEvents=0,
+                sustainedArrowDownStableRounds=0,
+                sustainedArrowDownStopReason="none",
+                sustainedArrowDownProductive=False,
                 productiveActions=[],
                 lastProductiveAction="",
                 sequenceGrowthEvents=0,
@@ -4261,6 +4686,15 @@ def test_batch_accepts_smart_stop_policy(monkeypatch, tmp_path) -> None:
                 largeSequenceMaxSteps=1000,
                 largeSequenceStepsExecuted=0,
                 largeSequenceStopReason="none",
+                sustainedArrowDownEnabled=True,
+                sustainedArrowDownRoundsExecuted=0,
+                sustainedArrowDownPressesSent=0,
+                sustainedArrowDownSequenceBefore=0,
+                sustainedArrowDownSequenceAfter=0,
+                sustainedArrowDownGrowthEvents=0,
+                sustainedArrowDownStableRounds=0,
+                sustainedArrowDownStopReason="none",
+                sustainedArrowDownProductive=False,
                 productiveActions=[],
                 lastProductiveAction="",
                 sequenceGrowthEvents=0,

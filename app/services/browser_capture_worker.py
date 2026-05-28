@@ -264,6 +264,28 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--large-sequence-step-wait-ms", default=250, type=int)
     parser.add_argument("--large-sequence-extend-while-growing", default="true")
     parser.add_argument("--large-sequence-stable-rounds", default=25, type=int)
+    parser.add_argument("--sustained-arrow-down-enabled", default="true")
+    parser.add_argument("--sustained-arrow-down-rounds", default=120, type=int)
+    parser.add_argument(
+        "--sustained-arrow-down-presses-per-round",
+        default=10,
+        type=int,
+    )
+    parser.add_argument(
+        "--sustained-arrow-down-press-delay-ms",
+        default=40,
+        type=int,
+    )
+    parser.add_argument(
+        "--sustained-arrow-down-round-wait-ms",
+        default=250,
+        type=int,
+    )
+    parser.add_argument(
+        "--sustained-arrow-down-stable-rounds",
+        default=20,
+        type=int,
+    )
     return parser
 
 
@@ -310,6 +332,24 @@ def _run_autonomous_capture(
     action_lookup = _build_action_lookup(actions)
     last_network_image_count = (
         int(get_network_image_count()) if callable(get_network_image_count) else 0
+    )
+    (
+        diagnostics,
+        productive_action_counts,
+        last_sequence_length,
+        last_sequence_growth_step,
+        last_network_image_count,
+        last_network_growth_step,
+    ) = _run_sustained_arrow_down_phase(
+        page=page,
+        args=args,
+        add_image=add_image,
+        discovered=discovered,
+        deadline=deadline,
+        diagnostics=diagnostics,
+        productive_action_counts=productive_action_counts,
+        get_network_image_count=get_network_image_count,
+        last_network_image_count=last_network_image_count,
     )
     step = 0
     normal_max_steps = min(
@@ -504,6 +544,120 @@ def _evaluate_smart_stop(
             return None
         return "smart_reader_boundary"
     return "smart_sequence_complete"
+
+
+def _run_sustained_arrow_down_phase(
+    page,
+    args,
+    add_image,
+    discovered: list[dict],
+    deadline: float,
+    diagnostics: dict,
+    productive_action_counts: dict[str, int],
+    get_network_image_count=None,
+    last_network_image_count: int = 0,
+) -> tuple[dict, dict[str, int], int, int, int, int]:
+    sequence_before = _dominant_sequence_length(discovered)
+    diagnostics["sustainedArrowDownSequenceBefore"] = sequence_before
+    last_sequence_length = sequence_before
+    last_sequence_growth_step = 0
+    last_network_growth_step = 0
+
+    if not diagnostics["sustainedArrowDownEnabled"]:
+        diagnostics["sustainedArrowDownSequenceAfter"] = sequence_before
+        return (
+            diagnostics,
+            productive_action_counts,
+            last_sequence_length,
+            last_sequence_growth_step,
+            last_network_image_count,
+            last_network_growth_step,
+        )
+
+    stable_rounds = 0
+    max_rounds = int(getattr(args, "sustained_arrow_down_rounds", 120))
+    presses_per_round = int(
+        getattr(args, "sustained_arrow_down_presses_per_round", 10)
+    )
+    press_delay_ms = int(
+        getattr(args, "sustained_arrow_down_press_delay_ms", 40)
+    )
+    round_wait_ms = int(
+        getattr(args, "sustained_arrow_down_round_wait_ms", 250)
+    )
+    stable_rounds_required = int(
+        getattr(args, "sustained_arrow_down_stable_rounds", 20)
+    )
+
+    for round_index in range(max_rounds):
+        if time.monotonic() >= deadline:
+            diagnostics["sustainedArrowDownStopReason"] = "duration_elapsed"
+            break
+        try:
+            page.evaluate("() => { if (document.body) document.body.focus(); }")
+        except Exception:
+            pass
+        for _ in range(presses_per_round):
+            if time.monotonic() >= deadline:
+                diagnostics["sustainedArrowDownStopReason"] = "duration_elapsed"
+                break
+            try:
+                page.keyboard.press("ArrowDown")
+                diagnostics["sustainedArrowDownPressesSent"] += 1
+            except Exception:
+                diagnostics["autonomousActionFailureCount"] += 1
+            if press_delay_ms > 0:
+                page.wait_for_timeout(press_delay_ms)
+        if diagnostics["sustainedArrowDownStopReason"] == "duration_elapsed":
+            break
+        if round_wait_ms > 0:
+            page.wait_for_timeout(round_wait_ms)
+        for url in _scan_dom_image_urls(page):
+            add_image(url, "dom")
+        diagnostics["sustainedArrowDownRoundsExecuted"] = round_index + 1
+        current_sequence_length = _dominant_sequence_length(discovered)
+        current_network_image_count = (
+            int(get_network_image_count()) if callable(get_network_image_count) else 0
+        )
+        if current_network_image_count > last_network_image_count:
+            last_network_growth_step = round_index + 1
+        last_network_image_count = current_network_image_count
+        if current_sequence_length > last_sequence_length:
+            stable_rounds = 0
+            last_sequence_growth_step = round_index + 1
+            diagnostics["sustainedArrowDownGrowthEvents"] += 1
+            diagnostics["sequenceGrowthEvents"] += 1
+            diagnostics["sustainedArrowDownProductive"] = True
+            diagnostics["lastProductiveAction"] = "sustained_arrow_down"
+            productive_action_counts["sustained_arrow_down"] = (
+                productive_action_counts.get("sustained_arrow_down", 0) + 1
+            )
+            diagnostics["productiveActions"] = _sorted_productive_actions(
+                productive_action_counts
+            )
+        else:
+            stable_rounds += 1
+        last_sequence_length = current_sequence_length
+        diagnostics["sustainedArrowDownStableRounds"] = stable_rounds
+        diagnostics["sustainedArrowDownSequenceAfter"] = current_sequence_length
+        if _should_enable_large_sequence_mode(diagnostics, current_sequence_length):
+            diagnostics["largeSequenceModeTriggered"] = True
+        if stable_rounds >= stable_rounds_required:
+            diagnostics["sustainedArrowDownStopReason"] = "stable_rounds_reached"
+            break
+    else:
+        diagnostics["sustainedArrowDownStopReason"] = "max_rounds_reached"
+
+    if diagnostics["sustainedArrowDownStopReason"] == "none":
+        diagnostics["sustainedArrowDownStopReason"] = "duration_elapsed"
+    return (
+        diagnostics,
+        productive_action_counts,
+        last_sequence_length,
+        last_sequence_growth_step,
+        last_network_image_count,
+        last_network_growth_step,
+    )
 
 
 def _should_enable_large_sequence_mode(
@@ -829,6 +983,17 @@ def _default_autonomous_diagnostics(args, image_count_before_actions: int) -> di
         ),
         "largeSequenceStepsExecuted": 0,
         "largeSequenceStopReason": "none",
+        "sustainedArrowDownEnabled": _is_true(
+            getattr(args, "sustained_arrow_down_enabled", "true")
+        ),
+        "sustainedArrowDownRoundsExecuted": 0,
+        "sustainedArrowDownPressesSent": 0,
+        "sustainedArrowDownSequenceBefore": 0,
+        "sustainedArrowDownSequenceAfter": 0,
+        "sustainedArrowDownGrowthEvents": 0,
+        "sustainedArrowDownStableRounds": 0,
+        "sustainedArrowDownStopReason": "none",
+        "sustainedArrowDownProductive": False,
         "productiveActions": [],
         "lastProductiveAction": "",
         "sequenceGrowthEvents": 0,
