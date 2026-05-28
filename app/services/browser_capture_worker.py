@@ -192,7 +192,9 @@ def main() -> int:
                     "notes": [
                         _capture_mode_note(
                             args.capture_mode,
-                            getattr(args, "reader_navigation_strategy", "generic"),
+                            _normalized_navigation_strategy(
+                                getattr(args, "reader_navigation_strategy", "generic")
+                            ),
                         ),
                         _stop_policy_note(args.stop_policy),
                         *(_session_notes(persistent_enabled)),
@@ -290,38 +292,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
     )
     parser.add_argument("--reader-navigation-strategy", default="generic")
-    parser.add_argument("--down-only-enabled", default="true")
-    parser.add_argument("--down-only-max-rounds", default=300, type=int)
+    parser.add_argument("--right-arrow-nav-enabled", default="true")
+    parser.add_argument("--right-arrow-max-steps", default=1000, type=int)
+    parser.add_argument("--right-arrow-wait-ms", default=250, type=int)
+    parser.add_argument("--right-arrow-stable-rounds", default=25, type=int)
     parser.add_argument(
-        "--down-only-presses-per-round",
-        default=12,
+        "--right-arrow-presses-per-round",
+        default=1,
         type=int,
     )
-    parser.add_argument(
-        "--down-only-press-delay-ms",
-        default=35,
-        type=int,
-    )
-    parser.add_argument(
-        "--down-only-round-wait-ms",
-        default=250,
-        type=int,
-    )
-    parser.add_argument(
-        "--down-only-stable-rounds",
-        default=25,
-        type=int,
-    )
-    parser.add_argument(
-        "--down-only-min-rounds",
-        default=10,
-        type=int,
-    )
-    parser.add_argument(
-        "--down-only-refocus-every-rounds",
-        default=10,
-        type=int,
-    )
+    parser.add_argument("--right-arrow-stop-on-url-change", default="true")
     return parser
 
 
@@ -376,19 +356,30 @@ def _run_autonomous_capture(
         last_sequence_growth_step,
         last_network_image_count,
         last_network_growth_step,
-    ) = _run_sustained_arrow_down_phase(
-        page=page,
-        args=args,
-        add_image=add_image,
-        discovered=discovered,
-        deadline=deadline,
-        diagnostics=diagnostics,
-        productive_action_counts=productive_action_counts,
-        get_network_image_count=get_network_image_count,
-        last_network_image_count=last_network_image_count,
+    ) = (
+        _run_sustained_arrow_down_phase(
+            page=page,
+            args=args,
+            add_image=add_image,
+            discovered=discovered,
+            deadline=deadline,
+            diagnostics=diagnostics,
+            productive_action_counts=productive_action_counts,
+            get_network_image_count=get_network_image_count,
+            last_network_image_count=last_network_image_count,
+        )
+        if diagnostics["readerNavigationStrategy"] != "right_arrow_only"
+        else (
+            diagnostics,
+            productive_action_counts,
+            last_sequence_length,
+            last_sequence_growth_step,
+            last_network_image_count,
+            last_network_growth_step,
+        )
     )
-    if diagnostics["readerNavigationStrategy"] == "down_arrow_only":
-        return _run_down_arrow_only_phase(
+    if diagnostics["readerNavigationStrategy"] == "right_arrow_only":
+        return _run_right_arrow_only_phase(
             page=page,
             args=args,
             add_image=add_image,
@@ -708,7 +699,7 @@ def _run_sustained_arrow_down_phase(
     )
 
 
-def _run_down_arrow_only_phase(
+def _run_right_arrow_only_phase(
     page,
     args,
     add_image,
@@ -720,60 +711,64 @@ def _run_down_arrow_only_phase(
     last_network_image_count: int = 0,
 ) -> dict:
     sequence_before = _dominant_sequence_length(discovered)
-    diagnostics["downOnlySequenceBefore"] = sequence_before
-    diagnostics["downOnlySequenceAfter"] = sequence_before
+    diagnostics["rightArrowSequenceBefore"] = sequence_before
+    diagnostics["rightArrowSequenceAfter"] = sequence_before
     last_sequence_length = sequence_before
     last_sequence_growth_step = 0
     stable_rounds = 0
-    rounds_executed = 0
+    steps_executed = 0
     stop_policy = getattr(args, "stop_policy", "sequence_stable")
-    max_rounds = int(getattr(args, "down_only_max_rounds", 300))
-    presses_per_round = int(getattr(args, "down_only_presses_per_round", 12))
-    press_delay_ms = int(getattr(args, "down_only_press_delay_ms", 35))
-    round_wait_ms = int(getattr(args, "down_only_round_wait_ms", 250))
-    stable_rounds_required = int(getattr(args, "down_only_stable_rounds", 25))
-    min_rounds = int(getattr(args, "down_only_min_rounds", 10))
-    refocus_every_rounds = max(
-        1, int(getattr(args, "down_only_refocus_every_rounds", 10))
+    max_steps = int(getattr(args, "right_arrow_max_steps", 1000))
+    presses_per_round = int(getattr(args, "right_arrow_presses_per_round", 1))
+    round_wait_ms = int(getattr(args, "right_arrow_wait_ms", 250))
+    stable_rounds_required = int(getattr(args, "right_arrow_stable_rounds", 25))
+    stop_on_url_change = _is_true(
+        getattr(args, "right_arrow_stop_on_url_change", "true")
     )
     last_network_growth_step = 0
+    initial_url = _current_page_url(page)
+    diagnostics["rightArrowInitialUrl"] = initial_url
+    diagnostics["rightArrowFinalUrl"] = initial_url
 
-    if not diagnostics["downOnlyEnabled"]:
-        diagnostics["downOnlyStopReason"] = "disabled"
+    if not diagnostics["rightArrowNavigationEnabled"]:
+        diagnostics["rightArrowStopReason"] = "disabled"
         diagnostics["autonomousStopReason"] = "duration_elapsed"
         diagnostics["sequenceLengthAfterExploration"] = sequence_before
         diagnostics["imageCountAfterAutonomousActions"] = len(discovered)
         return diagnostics
 
-    for round_index in range(max_rounds):
+    for round_index in range(max_steps):
         if time.monotonic() >= deadline:
-            diagnostics["downOnlyStopReason"] = "down_only_timeout"
+            diagnostics["rightArrowStopReason"] = "duration_elapsed"
             break
-        if round_index % refocus_every_rounds == 0:
-            try:
-                page.evaluate("() => { if (document.body) document.body.focus(); }")
-            except Exception:
-                pass
+        try:
+            page.evaluate("() => { if (document.body) document.body.focus(); }")
+        except Exception:
+            pass
         for _ in range(presses_per_round):
             if time.monotonic() >= deadline:
-                diagnostics["downOnlyStopReason"] = "down_only_timeout"
+                diagnostics["rightArrowStopReason"] = "duration_elapsed"
                 break
             try:
-                page.keyboard.press("ArrowDown")
-                diagnostics["downOnlyPressesSent"] += 1
+                page.keyboard.press("ArrowRight")
+                diagnostics["rightArrowPressesSent"] += 1
             except Exception:
                 diagnostics["autonomousActionFailureCount"] += 1
-            if press_delay_ms > 0:
-                page.wait_for_timeout(press_delay_ms)
-        if diagnostics["downOnlyStopReason"] == "down_only_timeout":
+        if diagnostics["rightArrowStopReason"] == "duration_elapsed":
             break
         if round_wait_ms > 0:
             page.wait_for_timeout(round_wait_ms)
+        current_url = _current_page_url(page)
+        diagnostics["rightArrowFinalUrl"] = current_url
+        if stop_on_url_change and current_url and initial_url and current_url != initial_url:
+            diagnostics["rightArrowUrlChanged"] = True
+            diagnostics["rightArrowStopReason"] = "url_changed"
+            break
         for url in _scan_dom_image_urls(page):
             add_image(url, "dom")
 
-        rounds_executed = round_index + 1
-        diagnostics["downOnlyRoundsExecuted"] = rounds_executed
+        steps_executed = round_index + 1
+        diagnostics["rightArrowStepsExecuted"] = steps_executed
         current_sequence_length = _dominant_sequence_length(discovered)
         diagnostics["readerBoundarySuspected"] = (
             _detect_reader_boundary(page)
@@ -784,18 +779,18 @@ def _run_down_arrow_only_phase(
             int(get_network_image_count()) if callable(get_network_image_count) else 0
         )
         if current_network_image_count > last_network_image_count:
-            last_network_growth_step = rounds_executed
+            last_network_growth_step = steps_executed
         last_network_image_count = current_network_image_count
 
         if current_sequence_length > last_sequence_length:
             stable_rounds = 0
-            last_sequence_growth_step = rounds_executed
-            diagnostics["downOnlyGrowthEvents"] += 1
+            last_sequence_growth_step = steps_executed
+            diagnostics["rightArrowGrowthEvents"] += 1
             diagnostics["sequenceGrowthEvents"] += 1
-            diagnostics["downOnlyProductive"] = True
-            diagnostics["lastProductiveAction"] = "down_arrow_only"
-            productive_action_counts["down_arrow_only"] = (
-                productive_action_counts.get("down_arrow_only", 0) + 1
+            diagnostics["rightArrowProductive"] = True
+            diagnostics["lastProductiveAction"] = "right_arrow_only"
+            productive_action_counts["right_arrow_only"] = (
+                productive_action_counts.get("right_arrow_only", 0) + 1
             )
             diagnostics["productiveActions"] = _sorted_productive_actions(
                 productive_action_counts
@@ -804,29 +799,27 @@ def _run_down_arrow_only_phase(
             stable_rounds += 1
 
         last_sequence_length = current_sequence_length
-        diagnostics["downOnlySequenceAfter"] = current_sequence_length
-        diagnostics["downOnlyStableRounds"] = stable_rounds
-        diagnostics["carouselStepsExecuted"] = rounds_executed
-        diagnostics["autonomousActionsUsed"].append("down_arrow_only")
+        diagnostics["rightArrowSequenceAfter"] = current_sequence_length
+        diagnostics["rightArrowStableRounds"] = stable_rounds
+        diagnostics["carouselStepsExecuted"] = steps_executed
+        diagnostics["autonomousActionsUsed"].append("right_arrow_only")
 
         if _should_enable_large_sequence_mode(diagnostics, current_sequence_length):
             diagnostics["largeSequenceModeTriggered"] = True
         if diagnostics["largeSequenceModeTriggered"]:
             diagnostics["largeSequenceStepsExecuted"] += 1
 
-        if rounds_executed < min_rounds:
-            continue
         if stop_policy == "duration":
             continue
         if stop_policy == "sequence_stable" and stable_rounds >= stable_rounds_required:
-            diagnostics["downOnlyStopReason"] = "down_only_sequence_stable"
-            diagnostics["autonomousStopReason"] = "down_only_sequence_stable"
+            diagnostics["rightArrowStopReason"] = "right_arrow_sequence_stable"
+            diagnostics["autonomousStopReason"] = "right_arrow_sequence_stable"
             diagnostics["stoppedBecauseSequenceStable"] = True
             break
         if stop_policy == "smart" and stable_rounds >= stable_rounds_required:
             smart_reason = _evaluate_smart_stop(
                 diagnostics=diagnostics,
-                step=rounds_executed,
+                step=steps_executed,
                 stable_rounds=stable_rounds,
                 current_sequence_length=current_sequence_length,
                 last_network_growth_step=last_network_growth_step,
@@ -836,11 +829,11 @@ def _run_down_arrow_only_phase(
                 diagnostics["smartStopTriggered"] = True
                 diagnostics["smartStopReason"] = smart_reason
                 diagnostics["autonomousStopReason"] = (
-                    "down_only_sequence_stable"
+                    "right_arrow_sequence_stable"
                     if smart_reason == "smart_sequence_complete"
                     else smart_reason
                 )
-                diagnostics["downOnlyStopReason"] = diagnostics["autonomousStopReason"]
+                diagnostics["rightArrowStopReason"] = diagnostics["autonomousStopReason"]
                 diagnostics["stoppedBecauseSequenceStable"] = (
                     smart_reason == "smart_sequence_complete"
                 )
@@ -848,12 +841,12 @@ def _run_down_arrow_only_phase(
                     diagnostics["largeSequenceStopReason"] = smart_reason
                 break
     else:
-        diagnostics["downOnlyStopReason"] = "down_only_max_rounds_reached"
+        diagnostics["rightArrowStopReason"] = "max_steps_reached"
 
-    if diagnostics["downOnlyStopReason"] == "none":
-        diagnostics["downOnlyStopReason"] = "down_only_timeout"
+    if diagnostics["rightArrowStopReason"] == "none":
+        diagnostics["rightArrowStopReason"] = "duration_elapsed"
 
-    diagnostics["autonomousStepsExecuted"] = rounds_executed
+    diagnostics["autonomousStepsExecuted"] = steps_executed
     diagnostics["imageCountStableRounds"] = stable_rounds
     diagnostics["sequenceStableRounds"] = stable_rounds
     diagnostics["imageCountAfterAutonomousActions"] = len(discovered)
@@ -861,16 +854,12 @@ def _run_down_arrow_only_phase(
     diagnostics["lastSequenceGrowthStep"] = last_sequence_growth_step
 
     if diagnostics["largeSequenceModeTriggered"] and diagnostics["largeSequenceStopReason"] == "none":
-        diagnostics["largeSequenceStopReason"] = diagnostics["downOnlyStopReason"]
+        diagnostics["largeSequenceStopReason"] = diagnostics["rightArrowStopReason"]
     if stop_policy == "duration":
-        diagnostics["autonomousStopReason"] = (
-            "down_only_max_rounds_reached"
-            if diagnostics["downOnlyStopReason"] == "down_only_max_rounds_reached"
-            else "down_only_timeout"
-        )
+        diagnostics["autonomousStopReason"] = diagnostics["rightArrowStopReason"]
         diagnostics["stoppedBecauseSequenceStable"] = False
     elif diagnostics["autonomousStopReason"] == "none":
-        diagnostics["autonomousStopReason"] = diagnostics["downOnlyStopReason"]
+        diagnostics["autonomousStopReason"] = diagnostics["rightArrowStopReason"]
     return diagnostics
 
 
@@ -1197,9 +1186,11 @@ def _default_autonomous_diagnostics(args, image_count_before_actions: int) -> di
         ),
         "largeSequenceStepsExecuted": 0,
         "largeSequenceStopReason": "none",
-        "sustainedArrowDownEnabled": _is_true(
-            getattr(args, "sustained_arrow_down_enabled", "true")
-        ),
+        "sustainedArrowDownEnabled": _normalized_navigation_strategy(
+            getattr(args, "reader_navigation_strategy", "generic")
+        )
+        != "right_arrow_only"
+        and _is_true(getattr(args, "sustained_arrow_down_enabled", "true")),
         "sustainedArrowDownRoundsExecuted": 0,
         "sustainedArrowDownPressesSent": 0,
         "sustainedArrowDownSequenceBefore": 0,
@@ -1208,20 +1199,23 @@ def _default_autonomous_diagnostics(args, image_count_before_actions: int) -> di
         "sustainedArrowDownStableRounds": 0,
         "sustainedArrowDownStopReason": "none",
         "sustainedArrowDownProductive": False,
-        "readerNavigationStrategy": str(
+        "readerNavigationStrategy": _normalized_navigation_strategy(
             getattr(args, "reader_navigation_strategy", "generic")
         ),
-        "downOnlyEnabled": _is_true(
-            getattr(args, "down_only_enabled", "true")
+        "rightArrowNavigationEnabled": _is_true(
+            getattr(args, "right_arrow_nav_enabled", "true")
         ),
-        "downOnlyRoundsExecuted": 0,
-        "downOnlyPressesSent": 0,
-        "downOnlySequenceBefore": 0,
-        "downOnlySequenceAfter": 0,
-        "downOnlyGrowthEvents": 0,
-        "downOnlyStableRounds": 0,
-        "downOnlyStopReason": "none",
-        "downOnlyProductive": False,
+        "rightArrowStepsExecuted": 0,
+        "rightArrowPressesSent": 0,
+        "rightArrowSequenceBefore": 0,
+        "rightArrowSequenceAfter": 0,
+        "rightArrowGrowthEvents": 0,
+        "rightArrowStableRounds": 0,
+        "rightArrowStopReason": "none",
+        "rightArrowProductive": False,
+        "rightArrowUrlChanged": False,
+        "rightArrowInitialUrl": "",
+        "rightArrowFinalUrl": "",
         "forbiddenNavigationKeysUsed": False,
         "productiveActions": [],
         "lastProductiveAction": "",
@@ -1236,8 +1230,8 @@ def _default_autonomous_diagnostics(args, image_count_before_actions: int) -> di
 
 def _capture_mode_note(capture_mode: str, navigation_strategy: str = "generic") -> str:
     if capture_mode == "autonomous":
-        if navigation_strategy == "down_arrow_only":
-            return "Autonomous capture used deterministic ArrowDown-only reader traversal."
+        if navigation_strategy == "right_arrow_only":
+            return "Autonomous capture used deterministic ArrowRight-only reader traversal."
         return "Autonomous capture used generic scroll, wheel, and keyboard exploration."
     return "Assisted capture expects manual user interaction in visible browser."
 
@@ -1258,6 +1252,19 @@ def _session_notes(persistent_enabled: bool) -> list[str]:
 
 def _is_true(value: str) -> bool:
     return str(value).strip().lower() == "true"
+
+
+def _normalized_navigation_strategy(value: str) -> str:
+    normalized = str(value).strip().lower()
+    if normalized == "down_arrow_only":
+        return "right_arrow_only"
+    if normalized in {"generic", "right_arrow_only"}:
+        return normalized
+    return "generic"
+
+
+def _current_page_url(page) -> str:
+    return str(getattr(page, "url", "") or "")
 
 
 def _dominant_sequence_length(items: list[dict]) -> int:

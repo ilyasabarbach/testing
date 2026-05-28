@@ -75,14 +75,12 @@ class Settings:
     browser_sustained_arrow_down_round_wait_ms: int
     browser_sustained_arrow_down_stable_rounds: int
     browser_reader_navigation_strategy: str
-    browser_down_only_enabled: bool
-    browser_down_only_max_rounds: int
-    browser_down_only_presses_per_round: int
-    browser_down_only_press_delay_ms: int
-    browser_down_only_round_wait_ms: int
-    browser_down_only_stable_rounds: int
-    browser_down_only_min_rounds: int
-    browser_down_only_refocus_every_rounds: int
+    browser_right_arrow_nav_enabled: bool
+    browser_right_arrow_max_steps: int
+    browser_right_arrow_wait_ms: int
+    browser_right_arrow_stable_rounds: int
+    browser_right_arrow_presses_per_round: int
+    browser_right_arrow_stop_on_url_change: bool
     batch_max_urls: int
     batch_report_base_dir: str
     batch_download_base_dir: str
@@ -245,34 +243,37 @@ def get_settings() -> Settings:
         os.getenv("BROWSER_READER_NAVIGATION_STRATEGY", "generic").strip().lower()
         or "generic"
     )
-    if browser_reader_navigation_strategy not in {"generic", "down_arrow_only"}:
+    if browser_reader_navigation_strategy == "down_arrow_only":
+        browser_reader_navigation_strategy = "right_arrow_only"
+    if browser_reader_navigation_strategy not in {"generic", "right_arrow_only"}:
         browser_reader_navigation_strategy = "generic"
-    browser_down_only_enabled = _parse_bool(
-        os.getenv("BROWSER_DOWN_ONLY_ENABLED", "true"),
+    browser_right_arrow_nav_enabled = _parse_bool(
+        os.getenv(
+            "BROWSER_RIGHT_ARROW_NAV_ENABLED",
+            os.getenv("BROWSER_DOWN_ONLY_ENABLED", "true"),
+        ),
         True,
     )
-    down_only_max_rounds_raw = os.getenv("BROWSER_DOWN_ONLY_MAX_ROUNDS", "300").strip()
-    down_only_presses_per_round_raw = os.getenv(
-        "BROWSER_DOWN_ONLY_PRESSES_PER_ROUND",
-        "12",
+    right_arrow_max_steps_raw = os.getenv(
+        "BROWSER_RIGHT_ARROW_MAX_STEPS",
+        os.getenv("BROWSER_DOWN_ONLY_MAX_ROUNDS", "1000"),
     ).strip()
-    down_only_press_delay_ms_raw = os.getenv(
-        "BROWSER_DOWN_ONLY_PRESS_DELAY_MS",
-        "35",
+    right_arrow_wait_ms_raw = os.getenv(
+        "BROWSER_RIGHT_ARROW_WAIT_MS",
+        os.getenv("BROWSER_DOWN_ONLY_ROUND_WAIT_MS", "250"),
     ).strip()
-    down_only_round_wait_ms_raw = os.getenv(
-        "BROWSER_DOWN_ONLY_ROUND_WAIT_MS",
-        "250",
+    right_arrow_stable_rounds_raw = os.getenv(
+        "BROWSER_RIGHT_ARROW_STABLE_ROUNDS",
+        os.getenv("BROWSER_DOWN_ONLY_STABLE_ROUNDS", "25"),
     ).strip()
-    down_only_stable_rounds_raw = os.getenv(
-        "BROWSER_DOWN_ONLY_STABLE_ROUNDS",
-        "25",
+    right_arrow_presses_per_round_raw = os.getenv(
+        "BROWSER_RIGHT_ARROW_PRESSES_PER_ROUND",
+        os.getenv("BROWSER_DOWN_ONLY_PRESSES_PER_ROUND", "1"),
     ).strip()
-    down_only_min_rounds_raw = os.getenv("BROWSER_DOWN_ONLY_MIN_ROUNDS", "10").strip()
-    down_only_refocus_every_rounds_raw = os.getenv(
-        "BROWSER_DOWN_ONLY_REFOCUS_EVERY_ROUNDS",
-        os.getenv("BROWSER_DOWN_ONLY_REF0CUS_EVERY_ROUNDS", "10"),
-    ).strip()
+    browser_right_arrow_stop_on_url_change = _parse_bool(
+        os.getenv("BROWSER_RIGHT_ARROW_STOP_ON_URL_CHANGE", "true"),
+        True,
+    )
     sustained_arrow_down_rounds_raw = os.getenv(
         "BROWSER_SUSTAINED_ARROW_DOWN_ROUNDS",
         "120",
@@ -435,33 +436,21 @@ def get_settings() -> Settings:
     except ValueError:
         browser_sustained_arrow_down_stable_rounds = 20
     try:
-        browser_down_only_max_rounds = int(down_only_max_rounds_raw)
+        browser_right_arrow_max_steps = int(right_arrow_max_steps_raw)
     except ValueError:
-        browser_down_only_max_rounds = 300
+        browser_right_arrow_max_steps = 1000
     try:
-        browser_down_only_presses_per_round = int(down_only_presses_per_round_raw)
+        browser_right_arrow_wait_ms = int(right_arrow_wait_ms_raw)
     except ValueError:
-        browser_down_only_presses_per_round = 12
+        browser_right_arrow_wait_ms = 250
     try:
-        browser_down_only_press_delay_ms = int(down_only_press_delay_ms_raw)
+        browser_right_arrow_stable_rounds = int(right_arrow_stable_rounds_raw)
     except ValueError:
-        browser_down_only_press_delay_ms = 35
+        browser_right_arrow_stable_rounds = 25
     try:
-        browser_down_only_round_wait_ms = int(down_only_round_wait_ms_raw)
+        browser_right_arrow_presses_per_round = int(right_arrow_presses_per_round_raw)
     except ValueError:
-        browser_down_only_round_wait_ms = 250
-    try:
-        browser_down_only_stable_rounds = int(down_only_stable_rounds_raw)
-    except ValueError:
-        browser_down_only_stable_rounds = 25
-    try:
-        browser_down_only_min_rounds = int(down_only_min_rounds_raw)
-    except ValueError:
-        browser_down_only_min_rounds = 10
-    try:
-        browser_down_only_refocus_every_rounds = int(down_only_refocus_every_rounds_raw)
-    except ValueError:
-        browser_down_only_refocus_every_rounds = 10
+        browser_right_arrow_presses_per_round = 1
     try:
         batch_max_urls = int(batch_max_urls_raw)
     except ValueError:
@@ -527,20 +516,14 @@ def get_settings() -> Settings:
         browser_sustained_arrow_down_round_wait_ms = 250
     if browser_sustained_arrow_down_stable_rounds < 1:
         browser_sustained_arrow_down_stable_rounds = 20
-    if browser_down_only_max_rounds < 1:
-        browser_down_only_max_rounds = 300
-    if browser_down_only_presses_per_round < 1:
-        browser_down_only_presses_per_round = 12
-    if browser_down_only_press_delay_ms < 0:
-        browser_down_only_press_delay_ms = 35
-    if browser_down_only_round_wait_ms < 0:
-        browser_down_only_round_wait_ms = 250
-    if browser_down_only_stable_rounds < 1:
-        browser_down_only_stable_rounds = 25
-    if browser_down_only_min_rounds < 0:
-        browser_down_only_min_rounds = 10
-    if browser_down_only_refocus_every_rounds < 1:
-        browser_down_only_refocus_every_rounds = 10
+    if browser_right_arrow_max_steps < 1:
+        browser_right_arrow_max_steps = 1000
+    if browser_right_arrow_wait_ms < 0:
+        browser_right_arrow_wait_ms = 250
+    if browser_right_arrow_stable_rounds < 1:
+        browser_right_arrow_stable_rounds = 25
+    if browser_right_arrow_presses_per_round < 1:
+        browser_right_arrow_presses_per_round = 1
     if batch_max_urls <= 0:
         batch_max_urls = 20
 
@@ -599,14 +582,12 @@ def get_settings() -> Settings:
         browser_sustained_arrow_down_round_wait_ms=browser_sustained_arrow_down_round_wait_ms,
         browser_sustained_arrow_down_stable_rounds=browser_sustained_arrow_down_stable_rounds,
         browser_reader_navigation_strategy=browser_reader_navigation_strategy,
-        browser_down_only_enabled=browser_down_only_enabled,
-        browser_down_only_max_rounds=browser_down_only_max_rounds,
-        browser_down_only_presses_per_round=browser_down_only_presses_per_round,
-        browser_down_only_press_delay_ms=browser_down_only_press_delay_ms,
-        browser_down_only_round_wait_ms=browser_down_only_round_wait_ms,
-        browser_down_only_stable_rounds=browser_down_only_stable_rounds,
-        browser_down_only_min_rounds=browser_down_only_min_rounds,
-        browser_down_only_refocus_every_rounds=browser_down_only_refocus_every_rounds,
+        browser_right_arrow_nav_enabled=browser_right_arrow_nav_enabled,
+        browser_right_arrow_max_steps=browser_right_arrow_max_steps,
+        browser_right_arrow_wait_ms=browser_right_arrow_wait_ms,
+        browser_right_arrow_stable_rounds=browser_right_arrow_stable_rounds,
+        browser_right_arrow_presses_per_round=browser_right_arrow_presses_per_round,
+        browser_right_arrow_stop_on_url_change=browser_right_arrow_stop_on_url_change,
         batch_max_urls=batch_max_urls,
         batch_report_base_dir=batch_report_base_dir,
         batch_download_base_dir=batch_download_base_dir,
