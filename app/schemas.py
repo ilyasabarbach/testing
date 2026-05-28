@@ -151,6 +151,17 @@ class ChapterCaptureDiagnostics(BaseModel):
     sustainedArrowDownStableRounds: int
     sustainedArrowDownStopReason: str
     sustainedArrowDownProductive: bool
+    readerNavigationStrategy: Literal["generic", "down_arrow_only"]
+    downOnlyEnabled: bool
+    downOnlyRoundsExecuted: int
+    downOnlyPressesSent: int
+    downOnlySequenceBefore: int
+    downOnlySequenceAfter: int
+    downOnlyGrowthEvents: int
+    downOnlyStableRounds: int
+    downOnlyStopReason: str
+    downOnlyProductive: bool
+    forbiddenNavigationKeysUsed: bool
     productiveActions: list[str]
     lastProductiveAction: str
     sequenceGrowthEvents: int

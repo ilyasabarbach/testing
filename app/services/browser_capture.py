@@ -83,6 +83,15 @@ async def capture_chapter_images(
         sustained_arrow_down_press_delay_ms=settings.browser_sustained_arrow_down_press_delay_ms,
         sustained_arrow_down_round_wait_ms=settings.browser_sustained_arrow_down_round_wait_ms,
         sustained_arrow_down_stable_rounds=settings.browser_sustained_arrow_down_stable_rounds,
+        reader_navigation_strategy=settings.browser_reader_navigation_strategy,
+        down_only_enabled=settings.browser_down_only_enabled,
+        down_only_max_rounds=settings.browser_down_only_max_rounds,
+        down_only_presses_per_round=settings.browser_down_only_presses_per_round,
+        down_only_press_delay_ms=settings.browser_down_only_press_delay_ms,
+        down_only_round_wait_ms=settings.browser_down_only_round_wait_ms,
+        down_only_stable_rounds=settings.browser_down_only_stable_rounds,
+        down_only_min_rounds=settings.browser_down_only_min_rounds,
+        down_only_refocus_every_rounds=settings.browser_down_only_refocus_every_rounds,
     )
     payload = await asyncio.to_thread(
         run_capture_worker,
@@ -251,6 +260,21 @@ async def capture_chapter_images(
             ),
             sustainedArrowDownProductive=bool(
                 payload.get("sustainedArrowDownProductive", False)
+            ),
+            readerNavigationStrategy=str(
+                payload.get("readerNavigationStrategy", "generic")
+            ),
+            downOnlyEnabled=bool(payload.get("downOnlyEnabled", False)),
+            downOnlyRoundsExecuted=int(payload.get("downOnlyRoundsExecuted", 0)),
+            downOnlyPressesSent=int(payload.get("downOnlyPressesSent", 0)),
+            downOnlySequenceBefore=int(payload.get("downOnlySequenceBefore", 0)),
+            downOnlySequenceAfter=int(payload.get("downOnlySequenceAfter", 0)),
+            downOnlyGrowthEvents=int(payload.get("downOnlyGrowthEvents", 0)),
+            downOnlyStableRounds=int(payload.get("downOnlyStableRounds", 0)),
+            downOnlyStopReason=str(payload.get("downOnlyStopReason", "none")),
+            downOnlyProductive=bool(payload.get("downOnlyProductive", False)),
+            forbiddenNavigationKeysUsed=bool(
+                payload.get("forbiddenNavigationKeysUsed", False)
             ),
             productiveActions=list(payload.get("productiveActions", [])),
             lastProductiveAction=str(payload.get("lastProductiveAction", "")),
@@ -445,6 +469,15 @@ def build_capture_worker_command(
     sustained_arrow_down_press_delay_ms: int,
     sustained_arrow_down_round_wait_ms: int,
     sustained_arrow_down_stable_rounds: int,
+    reader_navigation_strategy: str,
+    down_only_enabled: bool,
+    down_only_max_rounds: int,
+    down_only_presses_per_round: int,
+    down_only_press_delay_ms: int,
+    down_only_round_wait_ms: int,
+    down_only_stable_rounds: int,
+    down_only_min_rounds: int,
+    down_only_refocus_every_rounds: int,
 ) -> list[str]:
     if browser_executable_path:
         executable_path = Path(browser_executable_path)
@@ -531,6 +564,24 @@ def build_capture_worker_command(
         str(sustained_arrow_down_round_wait_ms),
         "--sustained-arrow-down-stable-rounds",
         str(sustained_arrow_down_stable_rounds),
+        "--reader-navigation-strategy",
+        reader_navigation_strategy,
+        "--down-only-enabled",
+        "true" if down_only_enabled else "false",
+        "--down-only-max-rounds",
+        str(down_only_max_rounds),
+        "--down-only-presses-per-round",
+        str(down_only_presses_per_round),
+        "--down-only-press-delay-ms",
+        str(down_only_press_delay_ms),
+        "--down-only-round-wait-ms",
+        str(down_only_round_wait_ms),
+        "--down-only-stable-rounds",
+        str(down_only_stable_rounds),
+        "--down-only-min-rounds",
+        str(down_only_min_rounds),
+        "--down-only-refocus-every-rounds",
+        str(down_only_refocus_every_rounds),
     ]
     if browser_executable_path:
         command.extend(["--browser-executable-path", browser_executable_path])

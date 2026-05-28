@@ -76,6 +76,21 @@ BROWSER_LARGE_SEQUENCE_MAX_STEPS=1000
 BROWSER_LARGE_SEQUENCE_STEP_WAIT_MS=250
 BROWSER_LARGE_SEQUENCE_EXTEND_WHILE_GROWING=true
 BROWSER_LARGE_SEQUENCE_STABLE_ROUNDS=25
+BROWSER_SUSTAINED_ARROW_DOWN_ENABLED=true
+BROWSER_SUSTAINED_ARROW_DOWN_ROUNDS=120
+BROWSER_SUSTAINED_ARROW_DOWN_PRESSES_PER_ROUND=10
+BROWSER_SUSTAINED_ARROW_DOWN_PRESS_DELAY_MS=40
+BROWSER_SUSTAINED_ARROW_DOWN_ROUND_WAIT_MS=250
+BROWSER_SUSTAINED_ARROW_DOWN_STABLE_ROUNDS=20
+BROWSER_READER_NAVIGATION_STRATEGY=generic
+BROWSER_DOWN_ONLY_ENABLED=true
+BROWSER_DOWN_ONLY_MAX_ROUNDS=300
+BROWSER_DOWN_ONLY_PRESSES_PER_ROUND=12
+BROWSER_DOWN_ONLY_PRESS_DELAY_MS=35
+BROWSER_DOWN_ONLY_ROUND_WAIT_MS=250
+BROWSER_DOWN_ONLY_STABLE_ROUNDS=25
+BROWSER_DOWN_ONLY_MIN_ROUNDS=10
+BROWSER_DOWN_ONLY_REFOCUS_EVERY_ROUNDS=10
 BROWSER_AUTONOMOUS_CAPTURE_ENABLED=true
 BROWSER_AUTONOMOUS_MAX_STEPS=60
 BROWSER_AUTONOMOUS_STEP_WAIT_MS=700
@@ -132,6 +147,21 @@ Project includes [.env.example](C:/Users/ilyas.abarbach/Documents/testing/.env.e
 - `BROWSER_LARGE_SEQUENCE_STEP_WAIT_MS`: shorter wait used during large sequence exploration
 - `BROWSER_LARGE_SEQUENCE_EXTEND_WHILE_GROWING`: keep exploring past normal step limit while sequence still grows
 - `BROWSER_LARGE_SEQUENCE_STABLE_ROUNDS`: stable rounds required before large sequence smart stop finishes
+- `BROWSER_SUSTAINED_ARROW_DOWN_ENABLED`: run a generic sustained ArrowDown warm-up phase before generic exploration
+- `BROWSER_SUSTAINED_ARROW_DOWN_ROUNDS`: maximum sustained ArrowDown rounds
+- `BROWSER_SUSTAINED_ARROW_DOWN_PRESSES_PER_ROUND`: repeated ArrowDown presses per sustained round
+- `BROWSER_SUSTAINED_ARROW_DOWN_PRESS_DELAY_MS`: delay between sustained ArrowDown presses
+- `BROWSER_SUSTAINED_ARROW_DOWN_ROUND_WAIT_MS`: wait after each sustained ArrowDown round
+- `BROWSER_SUSTAINED_ARROW_DOWN_STABLE_ROUNDS`: stable rounds that stop the sustained ArrowDown warm-up
+- `BROWSER_READER_NAVIGATION_STRATEGY`: `generic` or `down_arrow_only`
+- `BROWSER_DOWN_ONLY_ENABLED`: enable deterministic down-arrow-only traversal support
+- `BROWSER_DOWN_ONLY_MAX_ROUNDS`: hard cap for down-arrow-only traversal rounds
+- `BROWSER_DOWN_ONLY_PRESSES_PER_ROUND`: repeated ArrowDown presses sent per round
+- `BROWSER_DOWN_ONLY_PRESS_DELAY_MS`: delay between ArrowDown presses in down-arrow-only mode
+- `BROWSER_DOWN_ONLY_ROUND_WAIT_MS`: wait after each down-arrow-only round
+- `BROWSER_DOWN_ONLY_STABLE_ROUNDS`: stable rounds required before down-arrow-only mode stops
+- `BROWSER_DOWN_ONLY_MIN_ROUNDS`: minimum rounds before down-arrow-only mode may stop
+- `BROWSER_DOWN_ONLY_REFOCUS_EVERY_ROUNDS`: refocus page/body cadence during down-arrow-only traversal
 - `BROWSER_AUTONOMOUS_CAPTURE_ENABLED`: enable autonomous generic capture strategy
 - `BROWSER_AUTONOMOUS_MAX_STEPS`: maximum autonomous exploration actions
 - `BROWSER_AUTONOMOUS_STEP_WAIT_MS`: wait after each autonomous action
@@ -258,6 +288,30 @@ Try:
 Browser preview mode can use either:
 - Playwright-installed browser binaries
 - an existing system browser executable
+
+### Autonomous capture navigation
+
+Autonomous capture now supports two generic navigation strategies:
+- `generic`: existing mixed exploration using scroll, wheel, and safe keyboard actions
+- `down_arrow_only`: deterministic reader traversal that repeatedly sends `ArrowDown`
+
+Use `BROWSER_READER_NAVIGATION_STRATEGY=down_arrow_only` for readers where holding or repeatedly pressing the down arrow reveals the next images progressively.
+
+Why this exists:
+- some readers load one image at first and reveal the rest only while moving downward through the reader
+- `ArrowLeft` and `ArrowRight` are intentionally avoided in `down_arrow_only` mode because they can navigate to another chapter
+- `ArrowUp` and `End` are intentionally avoided because they either move backward or can skip lazy-loaded images too aggressively
+
+Recommended demo config for these readers:
+
+```env
+BROWSER_READER_NAVIGATION_STRATEGY=down_arrow_only
+```
+
+Limitations:
+- this remains generic, not site-specific
+- some readers may still need longer `durationSeconds`
+- the strategy avoids chapter-navigation-like keys on purpose, so it may be slower than a site-specific automation approach
 
 For Windows/Uvicorn stability, browser preview is isolated in a separate Python worker process instead of running Playwright directly inside the main API server process.
 Browser preview can also scroll the page in controlled steps, probe internal scrollable containers, and wait for image-count stabilization to help trigger lazy-loaded reader images before final DOM extraction.
