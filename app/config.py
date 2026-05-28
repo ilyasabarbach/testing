@@ -75,6 +75,17 @@ class Settings:
     browser_sustained_arrow_down_round_wait_ms: int
     browser_sustained_arrow_down_stable_rounds: int
     browser_reader_navigation_strategy: str
+    browser_adaptive_arrow_enabled: bool
+    browser_adaptive_arrow_candidates: list[str]
+    browser_adaptive_arrow_probe_rounds: int
+    browser_adaptive_arrow_presses_per_round: int
+    browser_adaptive_arrow_wait_ms: int
+    browser_adaptive_arrow_min_sequence_gain: int
+    browser_adaptive_arrow_stop_on_url_change: bool
+    browser_adaptive_arrow_max_steps: int
+    browser_adaptive_arrow_stable_rounds: int
+    browser_adaptive_arrow_presses_per_step: int
+    browser_adaptive_arrow_step_wait_ms: int
     browser_right_arrow_nav_enabled: bool
     browser_right_arrow_max_steps: int
     browser_right_arrow_wait_ms: int
@@ -97,6 +108,13 @@ def _parse_bool(raw_value: str, default: bool) -> bool:
     if normalized in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+def _parse_adaptive_arrow_candidates(raw_value: str) -> list[str]:
+    allowed = {"ArrowRight", "ArrowDown"}
+    candidates = [value.strip() for value in raw_value.split(",") if value.strip()]
+    normalized = [value for value in candidates if value in allowed]
+    return normalized or ["ArrowRight", "ArrowDown"]
 
 
 def get_settings() -> Settings:
@@ -245,8 +263,58 @@ def get_settings() -> Settings:
     )
     if browser_reader_navigation_strategy == "down_arrow_only":
         browser_reader_navigation_strategy = "right_arrow_only"
-    if browser_reader_navigation_strategy not in {"generic", "right_arrow_only"}:
+    if browser_reader_navigation_strategy not in {
+        "generic",
+        "right_arrow_only",
+        "adaptive_arrow",
+    }:
         browser_reader_navigation_strategy = "generic"
+    browser_adaptive_arrow_enabled = _parse_bool(
+        os.getenv("BROWSER_ADAPTIVE_ARROW_ENABLED", "true"),
+        True,
+    )
+    browser_adaptive_arrow_candidates = _parse_adaptive_arrow_candidates(
+        os.getenv(
+            "BROWSER_ADAPTIVE_ARROW_CANDIDATES",
+            "ArrowRight,ArrowDown",
+        )
+    )
+    adaptive_arrow_probe_rounds_raw = os.getenv(
+        "BROWSER_ADAPTIVE_ARROW_PROBE_ROUNDS",
+        "3",
+    ).strip()
+    adaptive_arrow_presses_per_round_raw = os.getenv(
+        "BROWSER_ADAPTIVE_ARROW_PRESSES_PER_ROUND",
+        "3",
+    ).strip()
+    adaptive_arrow_wait_ms_raw = os.getenv(
+        "BROWSER_ADAPTIVE_ARROW_WAIT_MS",
+        "300",
+    ).strip()
+    adaptive_arrow_min_sequence_gain_raw = os.getenv(
+        "BROWSER_ADAPTIVE_ARROW_MIN_SEQUENCE_GAIN",
+        "1",
+    ).strip()
+    browser_adaptive_arrow_stop_on_url_change = _parse_bool(
+        os.getenv("BROWSER_ADAPTIVE_ARROW_STOP_ON_URL_CHANGE", "true"),
+        True,
+    )
+    adaptive_arrow_max_steps_raw = os.getenv(
+        "BROWSER_ADAPTIVE_ARROW_MAX_STEPS",
+        "1000",
+    ).strip()
+    adaptive_arrow_stable_rounds_raw = os.getenv(
+        "BROWSER_ADAPTIVE_ARROW_STABLE_ROUNDS",
+        "20",
+    ).strip()
+    adaptive_arrow_presses_per_step_raw = os.getenv(
+        "BROWSER_ADAPTIVE_ARROW_PRESSES_PER_STEP",
+        "1",
+    ).strip()
+    adaptive_arrow_step_wait_ms_raw = os.getenv(
+        "BROWSER_ADAPTIVE_ARROW_STEP_WAIT_MS",
+        "200",
+    ).strip()
     browser_right_arrow_nav_enabled = _parse_bool(
         os.getenv(
             "BROWSER_RIGHT_ARROW_NAV_ENABLED",
@@ -436,6 +504,44 @@ def get_settings() -> Settings:
     except ValueError:
         browser_sustained_arrow_down_stable_rounds = 20
     try:
+        browser_adaptive_arrow_probe_rounds = int(adaptive_arrow_probe_rounds_raw)
+    except ValueError:
+        browser_adaptive_arrow_probe_rounds = 3
+    try:
+        browser_adaptive_arrow_presses_per_round = int(
+            adaptive_arrow_presses_per_round_raw
+        )
+    except ValueError:
+        browser_adaptive_arrow_presses_per_round = 3
+    try:
+        browser_adaptive_arrow_wait_ms = int(adaptive_arrow_wait_ms_raw)
+    except ValueError:
+        browser_adaptive_arrow_wait_ms = 300
+    try:
+        browser_adaptive_arrow_min_sequence_gain = int(
+            adaptive_arrow_min_sequence_gain_raw
+        )
+    except ValueError:
+        browser_adaptive_arrow_min_sequence_gain = 1
+    try:
+        browser_adaptive_arrow_max_steps = int(adaptive_arrow_max_steps_raw)
+    except ValueError:
+        browser_adaptive_arrow_max_steps = 1000
+    try:
+        browser_adaptive_arrow_stable_rounds = int(adaptive_arrow_stable_rounds_raw)
+    except ValueError:
+        browser_adaptive_arrow_stable_rounds = 20
+    try:
+        browser_adaptive_arrow_presses_per_step = int(
+            adaptive_arrow_presses_per_step_raw
+        )
+    except ValueError:
+        browser_adaptive_arrow_presses_per_step = 1
+    try:
+        browser_adaptive_arrow_step_wait_ms = int(adaptive_arrow_step_wait_ms_raw)
+    except ValueError:
+        browser_adaptive_arrow_step_wait_ms = 200
+    try:
         browser_right_arrow_max_steps = int(right_arrow_max_steps_raw)
     except ValueError:
         browser_right_arrow_max_steps = 1000
@@ -516,6 +622,22 @@ def get_settings() -> Settings:
         browser_sustained_arrow_down_round_wait_ms = 250
     if browser_sustained_arrow_down_stable_rounds < 1:
         browser_sustained_arrow_down_stable_rounds = 20
+    if browser_adaptive_arrow_probe_rounds < 1:
+        browser_adaptive_arrow_probe_rounds = 3
+    if browser_adaptive_arrow_presses_per_round < 1:
+        browser_adaptive_arrow_presses_per_round = 3
+    if browser_adaptive_arrow_wait_ms < 0:
+        browser_adaptive_arrow_wait_ms = 300
+    if browser_adaptive_arrow_min_sequence_gain < 1:
+        browser_adaptive_arrow_min_sequence_gain = 1
+    if browser_adaptive_arrow_max_steps < 1:
+        browser_adaptive_arrow_max_steps = 1000
+    if browser_adaptive_arrow_stable_rounds < 1:
+        browser_adaptive_arrow_stable_rounds = 20
+    if browser_adaptive_arrow_presses_per_step < 1:
+        browser_adaptive_arrow_presses_per_step = 1
+    if browser_adaptive_arrow_step_wait_ms < 0:
+        browser_adaptive_arrow_step_wait_ms = 200
     if browser_right_arrow_max_steps < 1:
         browser_right_arrow_max_steps = 1000
     if browser_right_arrow_wait_ms < 0:
@@ -582,6 +704,17 @@ def get_settings() -> Settings:
         browser_sustained_arrow_down_round_wait_ms=browser_sustained_arrow_down_round_wait_ms,
         browser_sustained_arrow_down_stable_rounds=browser_sustained_arrow_down_stable_rounds,
         browser_reader_navigation_strategy=browser_reader_navigation_strategy,
+        browser_adaptive_arrow_enabled=browser_adaptive_arrow_enabled,
+        browser_adaptive_arrow_candidates=browser_adaptive_arrow_candidates,
+        browser_adaptive_arrow_probe_rounds=browser_adaptive_arrow_probe_rounds,
+        browser_adaptive_arrow_presses_per_round=browser_adaptive_arrow_presses_per_round,
+        browser_adaptive_arrow_wait_ms=browser_adaptive_arrow_wait_ms,
+        browser_adaptive_arrow_min_sequence_gain=browser_adaptive_arrow_min_sequence_gain,
+        browser_adaptive_arrow_stop_on_url_change=browser_adaptive_arrow_stop_on_url_change,
+        browser_adaptive_arrow_max_steps=browser_adaptive_arrow_max_steps,
+        browser_adaptive_arrow_stable_rounds=browser_adaptive_arrow_stable_rounds,
+        browser_adaptive_arrow_presses_per_step=browser_adaptive_arrow_presses_per_step,
+        browser_adaptive_arrow_step_wait_ms=browser_adaptive_arrow_step_wait_ms,
         browser_right_arrow_nav_enabled=browser_right_arrow_nav_enabled,
         browser_right_arrow_max_steps=browser_right_arrow_max_steps,
         browser_right_arrow_wait_ms=browser_right_arrow_wait_ms,

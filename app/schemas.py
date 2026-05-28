@@ -151,7 +151,25 @@ class ChapterCaptureDiagnostics(BaseModel):
     sustainedArrowDownStableRounds: int
     sustainedArrowDownStopReason: str
     sustainedArrowDownProductive: bool
-    readerNavigationStrategy: Literal["generic", "right_arrow_only"]
+    readerNavigationStrategy: Literal["generic", "right_arrow_only", "adaptive_arrow"]
+    adaptiveArrowEnabled: bool = False
+    adaptiveArrowCandidates: list[str] = []
+    adaptiveArrowSelectedKey: str = ""
+    adaptiveArrowProbeRounds: int = 0
+    adaptiveArrowProbeResults: list[dict] = []
+    adaptiveArrowUnsafeKeys: list[str] = []
+    adaptiveArrowProductiveKeys: list[str] = []
+    adaptiveArrowNoProductiveKeyFound: bool = False
+    adaptiveArrowStepsExecuted: int = 0
+    adaptiveArrowPressesSent: int = 0
+    adaptiveArrowSequenceBefore: int = 0
+    adaptiveArrowSequenceAfter: int = 0
+    adaptiveArrowGrowthEvents: int = 0
+    adaptiveArrowStableRounds: int = 0
+    adaptiveArrowStopReason: str = "none"
+    adaptiveArrowUrlChanged: bool = False
+    adaptiveArrowInitialUrl: str = ""
+    adaptiveArrowFinalUrl: str = ""
     rightArrowNavigationEnabled: bool
     rightArrowStepsExecuted: int
     rightArrowPressesSent: int

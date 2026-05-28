@@ -84,6 +84,17 @@ async def capture_chapter_images(
         sustained_arrow_down_round_wait_ms=settings.browser_sustained_arrow_down_round_wait_ms,
         sustained_arrow_down_stable_rounds=settings.browser_sustained_arrow_down_stable_rounds,
         reader_navigation_strategy=settings.browser_reader_navigation_strategy,
+        adaptive_arrow_enabled=settings.browser_adaptive_arrow_enabled,
+        adaptive_arrow_candidates=settings.browser_adaptive_arrow_candidates,
+        adaptive_arrow_probe_rounds=settings.browser_adaptive_arrow_probe_rounds,
+        adaptive_arrow_presses_per_round=settings.browser_adaptive_arrow_presses_per_round,
+        adaptive_arrow_wait_ms=settings.browser_adaptive_arrow_wait_ms,
+        adaptive_arrow_min_sequence_gain=settings.browser_adaptive_arrow_min_sequence_gain,
+        adaptive_arrow_stop_on_url_change=settings.browser_adaptive_arrow_stop_on_url_change,
+        adaptive_arrow_max_steps=settings.browser_adaptive_arrow_max_steps,
+        adaptive_arrow_stable_rounds=settings.browser_adaptive_arrow_stable_rounds,
+        adaptive_arrow_presses_per_step=settings.browser_adaptive_arrow_presses_per_step,
+        adaptive_arrow_step_wait_ms=settings.browser_adaptive_arrow_step_wait_ms,
         right_arrow_nav_enabled=settings.browser_right_arrow_nav_enabled,
         right_arrow_max_steps=settings.browser_right_arrow_max_steps,
         right_arrow_wait_ms=settings.browser_right_arrow_wait_ms,
@@ -262,6 +273,40 @@ async def capture_chapter_images(
             readerNavigationStrategy=str(
                 payload.get("readerNavigationStrategy", "generic")
             ),
+            adaptiveArrowEnabled=bool(payload.get("adaptiveArrowEnabled", False)),
+            adaptiveArrowCandidates=list(payload.get("adaptiveArrowCandidates", [])),
+            adaptiveArrowSelectedKey=str(payload.get("adaptiveArrowSelectedKey", "")),
+            adaptiveArrowProbeRounds=int(payload.get("adaptiveArrowProbeRounds", 0)),
+            adaptiveArrowProbeResults=list(payload.get("adaptiveArrowProbeResults", [])),
+            adaptiveArrowUnsafeKeys=list(payload.get("adaptiveArrowUnsafeKeys", [])),
+            adaptiveArrowProductiveKeys=list(
+                payload.get("adaptiveArrowProductiveKeys", [])
+            ),
+            adaptiveArrowNoProductiveKeyFound=bool(
+                payload.get("adaptiveArrowNoProductiveKeyFound", False)
+            ),
+            adaptiveArrowStepsExecuted=int(payload.get("adaptiveArrowStepsExecuted", 0)),
+            adaptiveArrowPressesSent=int(payload.get("adaptiveArrowPressesSent", 0)),
+            adaptiveArrowSequenceBefore=int(
+                payload.get("adaptiveArrowSequenceBefore", 0)
+            ),
+            adaptiveArrowSequenceAfter=int(
+                payload.get("adaptiveArrowSequenceAfter", 0)
+            ),
+            adaptiveArrowGrowthEvents=int(
+                payload.get("adaptiveArrowGrowthEvents", 0)
+            ),
+            adaptiveArrowStableRounds=int(
+                payload.get("adaptiveArrowStableRounds", 0)
+            ),
+            adaptiveArrowStopReason=str(
+                payload.get("adaptiveArrowStopReason", "none")
+            ),
+            adaptiveArrowUrlChanged=bool(
+                payload.get("adaptiveArrowUrlChanged", False)
+            ),
+            adaptiveArrowInitialUrl=str(payload.get("adaptiveArrowInitialUrl", "")),
+            adaptiveArrowFinalUrl=str(payload.get("adaptiveArrowFinalUrl", "")),
             rightArrowNavigationEnabled=bool(
                 payload.get("rightArrowNavigationEnabled", False)
             ),
@@ -473,6 +518,17 @@ def build_capture_worker_command(
     sustained_arrow_down_round_wait_ms: int,
     sustained_arrow_down_stable_rounds: int,
     reader_navigation_strategy: str,
+    adaptive_arrow_enabled: bool,
+    adaptive_arrow_candidates: list[str],
+    adaptive_arrow_probe_rounds: int,
+    adaptive_arrow_presses_per_round: int,
+    adaptive_arrow_wait_ms: int,
+    adaptive_arrow_min_sequence_gain: int,
+    adaptive_arrow_stop_on_url_change: bool,
+    adaptive_arrow_max_steps: int,
+    adaptive_arrow_stable_rounds: int,
+    adaptive_arrow_presses_per_step: int,
+    adaptive_arrow_step_wait_ms: int,
     right_arrow_nav_enabled: bool,
     right_arrow_max_steps: int,
     right_arrow_wait_ms: int,
@@ -567,6 +623,28 @@ def build_capture_worker_command(
         str(sustained_arrow_down_stable_rounds),
         "--reader-navigation-strategy",
         reader_navigation_strategy,
+        "--adaptive-arrow-enabled",
+        "true" if adaptive_arrow_enabled else "false",
+        "--adaptive-arrow-candidates",
+        ",".join(adaptive_arrow_candidates),
+        "--adaptive-arrow-probe-rounds",
+        str(adaptive_arrow_probe_rounds),
+        "--adaptive-arrow-presses-per-round",
+        str(adaptive_arrow_presses_per_round),
+        "--adaptive-arrow-wait-ms",
+        str(adaptive_arrow_wait_ms),
+        "--adaptive-arrow-min-sequence-gain",
+        str(adaptive_arrow_min_sequence_gain),
+        "--adaptive-arrow-stop-on-url-change",
+        "true" if adaptive_arrow_stop_on_url_change else "false",
+        "--adaptive-arrow-max-steps",
+        str(adaptive_arrow_max_steps),
+        "--adaptive-arrow-stable-rounds",
+        str(adaptive_arrow_stable_rounds),
+        "--adaptive-arrow-presses-per-step",
+        str(adaptive_arrow_presses_per_step),
+        "--adaptive-arrow-step-wait-ms",
+        str(adaptive_arrow_step_wait_ms),
         "--right-arrow-nav-enabled",
         "true" if right_arrow_nav_enabled else "false",
         "--right-arrow-max-steps",

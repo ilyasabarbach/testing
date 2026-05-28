@@ -287,6 +287,17 @@ def test_reader_readiness_config_defaults(monkeypatch) -> None:
     assert settings.browser_sustained_arrow_down_round_wait_ms == 250
     assert settings.browser_sustained_arrow_down_stable_rounds == 20
     assert settings.browser_reader_navigation_strategy == "generic"
+    assert settings.browser_adaptive_arrow_enabled is True
+    assert settings.browser_adaptive_arrow_candidates == ["ArrowRight", "ArrowDown"]
+    assert settings.browser_adaptive_arrow_probe_rounds == 3
+    assert settings.browser_adaptive_arrow_presses_per_round == 3
+    assert settings.browser_adaptive_arrow_wait_ms == 300
+    assert settings.browser_adaptive_arrow_min_sequence_gain == 1
+    assert settings.browser_adaptive_arrow_stop_on_url_change is True
+    assert settings.browser_adaptive_arrow_max_steps == 1000
+    assert settings.browser_adaptive_arrow_stable_rounds == 20
+    assert settings.browser_adaptive_arrow_presses_per_step == 1
+    assert settings.browser_adaptive_arrow_step_wait_ms == 200
     assert settings.browser_right_arrow_nav_enabled is True
     assert settings.browser_right_arrow_max_steps == 1000
     assert settings.browser_right_arrow_wait_ms == 250
@@ -321,7 +332,18 @@ def test_config_reads_reader_readiness_values_from_env(monkeypatch) -> None:
     monkeypatch.setenv("BROWSER_SUSTAINED_ARROW_DOWN_PRESS_DELAY_MS", "12")
     monkeypatch.setenv("BROWSER_SUSTAINED_ARROW_DOWN_ROUND_WAIT_MS", "99")
     monkeypatch.setenv("BROWSER_SUSTAINED_ARROW_DOWN_STABLE_ROUNDS", "7")
-    monkeypatch.setenv("BROWSER_READER_NAVIGATION_STRATEGY", "right_arrow_only")
+    monkeypatch.setenv("BROWSER_READER_NAVIGATION_STRATEGY", "adaptive_arrow")
+    monkeypatch.setenv("BROWSER_ADAPTIVE_ARROW_ENABLED", "false")
+    monkeypatch.setenv("BROWSER_ADAPTIVE_ARROW_CANDIDATES", "ArrowDown,ArrowRight")
+    monkeypatch.setenv("BROWSER_ADAPTIVE_ARROW_PROBE_ROUNDS", "4")
+    monkeypatch.setenv("BROWSER_ADAPTIVE_ARROW_PRESSES_PER_ROUND", "5")
+    monkeypatch.setenv("BROWSER_ADAPTIVE_ARROW_WAIT_MS", "111")
+    monkeypatch.setenv("BROWSER_ADAPTIVE_ARROW_MIN_SEQUENCE_GAIN", "2")
+    monkeypatch.setenv("BROWSER_ADAPTIVE_ARROW_STOP_ON_URL_CHANGE", "false")
+    monkeypatch.setenv("BROWSER_ADAPTIVE_ARROW_MAX_STEPS", "444")
+    monkeypatch.setenv("BROWSER_ADAPTIVE_ARROW_STABLE_ROUNDS", "9")
+    monkeypatch.setenv("BROWSER_ADAPTIVE_ARROW_PRESSES_PER_STEP", "2")
+    monkeypatch.setenv("BROWSER_ADAPTIVE_ARROW_STEP_WAIT_MS", "123")
     monkeypatch.setenv("BROWSER_RIGHT_ARROW_NAV_ENABLED", "false")
     monkeypatch.setenv("BROWSER_RIGHT_ARROW_MAX_STEPS", "44")
     monkeypatch.setenv("BROWSER_RIGHT_ARROW_WAIT_MS", "123")
@@ -356,7 +378,18 @@ def test_config_reads_reader_readiness_values_from_env(monkeypatch) -> None:
     assert settings.browser_sustained_arrow_down_press_delay_ms == 12
     assert settings.browser_sustained_arrow_down_round_wait_ms == 99
     assert settings.browser_sustained_arrow_down_stable_rounds == 7
-    assert settings.browser_reader_navigation_strategy == "right_arrow_only"
+    assert settings.browser_reader_navigation_strategy == "adaptive_arrow"
+    assert settings.browser_adaptive_arrow_enabled is False
+    assert settings.browser_adaptive_arrow_candidates == ["ArrowDown", "ArrowRight"]
+    assert settings.browser_adaptive_arrow_probe_rounds == 4
+    assert settings.browser_adaptive_arrow_presses_per_round == 5
+    assert settings.browser_adaptive_arrow_wait_ms == 111
+    assert settings.browser_adaptive_arrow_min_sequence_gain == 2
+    assert settings.browser_adaptive_arrow_stop_on_url_change is False
+    assert settings.browser_adaptive_arrow_max_steps == 444
+    assert settings.browser_adaptive_arrow_stable_rounds == 9
+    assert settings.browser_adaptive_arrow_presses_per_step == 2
+    assert settings.browser_adaptive_arrow_step_wait_ms == 123
     assert settings.browser_right_arrow_nav_enabled is False
     assert settings.browser_right_arrow_max_steps == 44
     assert settings.browser_right_arrow_wait_ms == 123
@@ -3293,6 +3326,524 @@ def test_right_arrow_only_strategy_stops_on_url_change_and_records_diagnostics(
     assert diagnostics["rightArrowFinalUrl"] == "https://example.com/comments"
 
 
+def test_adaptive_arrow_selects_arrow_right_when_productive(monkeypatch) -> None:
+    import app.services.browser_capture_worker as worker
+
+    class FakeKeyboard:
+        def __init__(self, page):
+            self.page = page
+            self.presses = []
+
+        def press(self, key: str) -> None:
+            self.presses.append(key)
+            self.page.handle_press(key)
+
+    class FakePage:
+        def __init__(self):
+            self.url = "https://example.com/chapter-1"
+            self.keyboard = FakeKeyboard(self)
+            self.mouse = SimpleNamespace(wheel=lambda dx, dy: None)
+            self.current_images = []
+            self.indices = {"ArrowRight": 0, "ArrowDown": 0}
+            self.progressions = {
+                "ArrowRight": [
+                    ["https://example.com/pages/01.webp"],
+                    [
+                        "https://example.com/pages/01.webp",
+                        "https://example.com/pages/02.webp",
+                    ],
+                    [
+                        "https://example.com/pages/01.webp",
+                        "https://example.com/pages/02.webp",
+                        "https://example.com/pages/03.webp",
+                    ],
+                ],
+                "ArrowDown": [],
+            }
+
+        def handle_press(self, key: str) -> None:
+            progression = self.progressions.get(key, [])
+            index = self.indices.get(key, 0)
+            if index < len(progression):
+                self.current_images = progression[index]
+                self.indices[key] = index + 1
+
+        def evaluate(self, script: str):
+            return None
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            return None
+
+        def goto(self, url: str, wait_until: str, timeout: int) -> None:
+            self.url = url
+            self.current_images = []
+
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._scan_dom_image_urls",
+        lambda page: list(page.current_images),
+    )
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_reader_boundary",
+        lambda page: False,
+    )
+    ticks = iter(range(500))
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker.time.monotonic", lambda: next(ticks)
+    )
+
+    args = SimpleNamespace(
+        capture_mode="autonomous",
+        stop_policy="sequence_stable",
+        duration_seconds=30,
+        timeout_ms=1000,
+        autonomous_enabled="true",
+        autonomous_max_steps=5,
+        autonomous_step_wait_ms=0,
+        autonomous_enable_keyboard="true",
+        autonomous_enable_mouse_wheel="true",
+        carousel_exploration_enabled="true",
+        carousel_max_steps=5,
+        sequence_stable_rounds=2,
+        reader_navigation_strategy="adaptive_arrow",
+        adaptive_arrow_enabled="true",
+        adaptive_arrow_candidates="ArrowRight,ArrowDown",
+        adaptive_arrow_probe_rounds=1,
+        adaptive_arrow_presses_per_round=1,
+        adaptive_arrow_wait_ms=0,
+        adaptive_arrow_min_sequence_gain=1,
+        adaptive_arrow_stop_on_url_change="true",
+        adaptive_arrow_max_steps=5,
+        adaptive_arrow_stable_rounds=1,
+        adaptive_arrow_presses_per_step=1,
+        adaptive_arrow_step_wait_ms=0,
+        smart_stop_min_steps=1,
+        smart_stop_stable_rounds=2,
+        smart_stop_min_sequence_length=3,
+        smart_stop_use_reader_boundary="false",
+        smart_stop_reader_boundary_min_sequence_length=20,
+        smart_stop_reader_boundary_recent_growth_window=20,
+        smart_stop_reader_boundary_stable_rounds=10,
+        large_sequence_mode_enabled="true",
+        large_sequence_min_length=20,
+        large_sequence_max_steps=1000,
+        large_sequence_step_wait_ms=0,
+        large_sequence_extend_while_growing="true",
+        large_sequence_stable_rounds=25,
+        sustained_arrow_down_enabled="false",
+        right_arrow_nav_enabled="true",
+        right_arrow_max_steps=5,
+        right_arrow_wait_ms=0,
+        right_arrow_stable_rounds=1,
+        right_arrow_presses_per_round=1,
+        right_arrow_stop_on_url_change="true",
+    )
+    discovered = []
+    seen = set()
+
+    def add_image(url: str, source: str) -> None:
+        if url in seen:
+            return
+        seen.add(url)
+        discovered.append({"url": url, "source": source})
+
+    page = FakePage()
+    diagnostics = worker._run_autonomous_capture(page, args, add_image, discovered, lambda: 0)
+
+    assert diagnostics["adaptiveArrowSelectedKey"] == "ArrowRight"
+    assert diagnostics["adaptiveArrowProductiveKeys"] == ["ArrowRight"]
+    assert diagnostics["adaptiveArrowUnsafeKeys"] == []
+    assert diagnostics["adaptiveArrowStepsExecuted"] > 0
+    assert diagnostics["adaptiveArrowStopReason"] == "adaptive_arrow_sequence_stable"
+    assert set(page.keyboard.presses) == {"ArrowRight", "ArrowDown"}
+    assert "ArrowLeft" not in page.keyboard.presses
+    assert "ArrowUp" not in page.keyboard.presses
+
+
+def test_adaptive_arrow_selects_arrow_down_when_arrow_right_changes_url(monkeypatch) -> None:
+    import app.services.browser_capture_worker as worker
+
+    class FakeKeyboard:
+        def __init__(self, page):
+            self.page = page
+            self.presses = []
+
+        def press(self, key: str) -> None:
+            self.presses.append(key)
+            self.page.handle_press(key)
+
+    class FakePage:
+        def __init__(self):
+            self.url = "https://example.com/chapter-1"
+            self.keyboard = FakeKeyboard(self)
+            self.mouse = SimpleNamespace(wheel=lambda dx, dy: None)
+            self.current_images = []
+            self.indices = {"ArrowRight": 0, "ArrowDown": 0}
+            self.progressions = {
+                "ArrowRight": [],
+                "ArrowDown": [
+                    ["https://example.com/pages/01.webp"],
+                    [
+                        "https://example.com/pages/01.webp",
+                        "https://example.com/pages/02.webp",
+                    ],
+                    [
+                        "https://example.com/pages/01.webp",
+                        "https://example.com/pages/02.webp",
+                        "https://example.com/pages/03.webp",
+                    ],
+                ],
+            }
+
+        def handle_press(self, key: str) -> None:
+            if key == "ArrowRight":
+                self.url = "https://example.com/next-chapter"
+                return
+            progression = self.progressions.get(key, [])
+            index = self.indices.get(key, 0)
+            if index < len(progression):
+                self.current_images = progression[index]
+                self.indices[key] = index + 1
+
+        def evaluate(self, script: str):
+            return None
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            return None
+
+        def goto(self, url: str, wait_until: str, timeout: int) -> None:
+            self.url = url
+            self.current_images = []
+
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._scan_dom_image_urls",
+        lambda page: list(page.current_images),
+    )
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_reader_boundary",
+        lambda page: False,
+    )
+    ticks = iter(range(500))
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker.time.monotonic", lambda: next(ticks)
+    )
+
+    args = SimpleNamespace(
+        capture_mode="autonomous",
+        stop_policy="sequence_stable",
+        duration_seconds=30,
+        timeout_ms=1000,
+        autonomous_enabled="true",
+        autonomous_max_steps=5,
+        autonomous_step_wait_ms=0,
+        autonomous_enable_keyboard="true",
+        autonomous_enable_mouse_wheel="true",
+        carousel_exploration_enabled="true",
+        carousel_max_steps=5,
+        sequence_stable_rounds=2,
+        reader_navigation_strategy="adaptive_arrow",
+        adaptive_arrow_enabled="true",
+        adaptive_arrow_candidates="ArrowRight,ArrowDown",
+        adaptive_arrow_probe_rounds=1,
+        adaptive_arrow_presses_per_round=1,
+        adaptive_arrow_wait_ms=0,
+        adaptive_arrow_min_sequence_gain=1,
+        adaptive_arrow_stop_on_url_change="true",
+        adaptive_arrow_max_steps=5,
+        adaptive_arrow_stable_rounds=1,
+        adaptive_arrow_presses_per_step=1,
+        adaptive_arrow_step_wait_ms=0,
+        smart_stop_min_steps=1,
+        smart_stop_stable_rounds=2,
+        smart_stop_min_sequence_length=3,
+        smart_stop_use_reader_boundary="false",
+        smart_stop_reader_boundary_min_sequence_length=20,
+        smart_stop_reader_boundary_recent_growth_window=20,
+        smart_stop_reader_boundary_stable_rounds=10,
+        large_sequence_mode_enabled="true",
+        large_sequence_min_length=20,
+        large_sequence_max_steps=1000,
+        large_sequence_step_wait_ms=0,
+        large_sequence_extend_while_growing="true",
+        large_sequence_stable_rounds=25,
+        sustained_arrow_down_enabled="false",
+        right_arrow_nav_enabled="true",
+        right_arrow_max_steps=5,
+        right_arrow_wait_ms=0,
+        right_arrow_stable_rounds=1,
+        right_arrow_presses_per_round=1,
+        right_arrow_stop_on_url_change="true",
+    )
+    discovered = []
+    seen = set()
+
+    def add_image(url: str, source: str) -> None:
+        if url in seen:
+            return
+        seen.add(url)
+        discovered.append({"url": url, "source": source})
+
+    page = FakePage()
+    diagnostics = worker._run_autonomous_capture(page, args, add_image, discovered, lambda: 0)
+
+    assert diagnostics["adaptiveArrowSelectedKey"] == "ArrowDown"
+    assert "ArrowRight" in diagnostics["adaptiveArrowUnsafeKeys"]
+    assert diagnostics["adaptiveArrowProductiveKeys"] == ["ArrowDown"]
+    assert page.keyboard.presses.count("ArrowRight") == 1
+    assert page.keyboard.presses.count("ArrowDown") > 1
+
+
+def test_adaptive_arrow_selects_arrow_right_when_arrow_down_changes_url(monkeypatch) -> None:
+    import app.services.browser_capture_worker as worker
+
+    class FakeKeyboard:
+        def __init__(self, page):
+            self.page = page
+            self.presses = []
+
+        def press(self, key: str) -> None:
+            self.presses.append(key)
+            self.page.handle_press(key)
+
+    class FakePage:
+        def __init__(self):
+            self.url = "https://example.com/chapter-1"
+            self.keyboard = FakeKeyboard(self)
+            self.mouse = SimpleNamespace(wheel=lambda dx, dy: None)
+            self.current_images = []
+            self.indices = {"ArrowRight": 0, "ArrowDown": 0}
+            self.progressions = {
+                "ArrowRight": [
+                    ["https://example.com/pages/01.webp"],
+                    [
+                        "https://example.com/pages/01.webp",
+                        "https://example.com/pages/02.webp",
+                    ],
+                ],
+                "ArrowDown": [],
+            }
+
+        def handle_press(self, key: str) -> None:
+            if key == "ArrowDown":
+                self.url = "https://example.com/other"
+                return
+            progression = self.progressions.get(key, [])
+            index = self.indices.get(key, 0)
+            if index < len(progression):
+                self.current_images = progression[index]
+                self.indices[key] = index + 1
+
+        def evaluate(self, script: str):
+            return None
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            return None
+
+        def goto(self, url: str, wait_until: str, timeout: int) -> None:
+            self.url = url
+            self.current_images = []
+
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._scan_dom_image_urls",
+        lambda page: list(page.current_images),
+    )
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_reader_boundary",
+        lambda page: False,
+    )
+    ticks = iter(range(500))
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker.time.monotonic", lambda: next(ticks)
+    )
+
+    args = SimpleNamespace(
+        capture_mode="autonomous",
+        stop_policy="sequence_stable",
+        duration_seconds=30,
+        timeout_ms=1000,
+        autonomous_enabled="true",
+        autonomous_max_steps=5,
+        autonomous_step_wait_ms=0,
+        autonomous_enable_keyboard="true",
+        autonomous_enable_mouse_wheel="true",
+        carousel_exploration_enabled="true",
+        carousel_max_steps=5,
+        sequence_stable_rounds=2,
+        reader_navigation_strategy="adaptive_arrow",
+        adaptive_arrow_enabled="true",
+        adaptive_arrow_candidates="ArrowRight,ArrowDown",
+        adaptive_arrow_probe_rounds=1,
+        adaptive_arrow_presses_per_round=1,
+        adaptive_arrow_wait_ms=0,
+        adaptive_arrow_min_sequence_gain=1,
+        adaptive_arrow_stop_on_url_change="true",
+        adaptive_arrow_max_steps=5,
+        adaptive_arrow_stable_rounds=1,
+        adaptive_arrow_presses_per_step=1,
+        adaptive_arrow_step_wait_ms=0,
+        smart_stop_min_steps=1,
+        smart_stop_stable_rounds=2,
+        smart_stop_min_sequence_length=3,
+        smart_stop_use_reader_boundary="false",
+        smart_stop_reader_boundary_min_sequence_length=20,
+        smart_stop_reader_boundary_recent_growth_window=20,
+        smart_stop_reader_boundary_stable_rounds=10,
+        large_sequence_mode_enabled="true",
+        large_sequence_min_length=20,
+        large_sequence_max_steps=1000,
+        large_sequence_step_wait_ms=0,
+        large_sequence_extend_while_growing="true",
+        large_sequence_stable_rounds=25,
+        sustained_arrow_down_enabled="false",
+        right_arrow_nav_enabled="true",
+        right_arrow_max_steps=5,
+        right_arrow_wait_ms=0,
+        right_arrow_stable_rounds=1,
+        right_arrow_presses_per_round=1,
+        right_arrow_stop_on_url_change="true",
+    )
+    discovered = []
+    seen = set()
+
+    def add_image(url: str, source: str) -> None:
+        if url in seen:
+            return
+        seen.add(url)
+        discovered.append({"url": url, "source": source})
+
+    page = FakePage()
+    diagnostics = worker._run_autonomous_capture(page, args, add_image, discovered, lambda: 0)
+
+    assert diagnostics["adaptiveArrowSelectedKey"] == "ArrowRight"
+    assert "ArrowDown" in diagnostics["adaptiveArrowUnsafeKeys"]
+    assert page.keyboard.presses.count("ArrowDown") == 1
+
+
+def test_adaptive_arrow_stops_on_url_change_during_traversal_and_preserves_images(
+    monkeypatch,
+) -> None:
+    import app.services.browser_capture_worker as worker
+
+    class FakeKeyboard:
+        def __init__(self, page):
+            self.page = page
+            self.presses = []
+
+        def press(self, key: str) -> None:
+            self.presses.append(key)
+            self.page.handle_press(key)
+
+    class FakePage:
+        def __init__(self):
+            self.url = "https://example.com/chapter-1"
+            self.keyboard = FakeKeyboard(self)
+            self.mouse = SimpleNamespace(wheel=lambda dx, dy: None)
+            self.current_images = []
+            self.right_presses = 0
+
+        def handle_press(self, key: str) -> None:
+            if key != "ArrowRight":
+                return
+            self.right_presses += 1
+            if self.right_presses == 1:
+                self.current_images = ["https://example.com/pages/01.webp"]
+            elif self.right_presses == 2:
+                self.current_images = [
+                    "https://example.com/pages/01.webp",
+                    "https://example.com/pages/02.webp",
+                ]
+            else:
+                self.url = "https://example.com/comments"
+
+        def evaluate(self, script: str):
+            return None
+
+        def wait_for_timeout(self, milliseconds: int) -> None:
+            return None
+
+        def goto(self, url: str, wait_until: str, timeout: int) -> None:
+            self.url = url
+            self.current_images = []
+
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._scan_dom_image_urls",
+        lambda page: list(page.current_images),
+    )
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_reader_boundary",
+        lambda page: False,
+    )
+    ticks = iter(range(500))
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker.time.monotonic", lambda: next(ticks)
+    )
+
+    args = SimpleNamespace(
+        capture_mode="autonomous",
+        stop_policy="duration",
+        duration_seconds=30,
+        timeout_ms=1000,
+        autonomous_enabled="true",
+        autonomous_max_steps=5,
+        autonomous_step_wait_ms=0,
+        autonomous_enable_keyboard="true",
+        autonomous_enable_mouse_wheel="true",
+        carousel_exploration_enabled="true",
+        carousel_max_steps=5,
+        sequence_stable_rounds=2,
+        reader_navigation_strategy="adaptive_arrow",
+        adaptive_arrow_enabled="true",
+        adaptive_arrow_candidates="ArrowRight,ArrowDown",
+        adaptive_arrow_probe_rounds=1,
+        adaptive_arrow_presses_per_round=1,
+        adaptive_arrow_wait_ms=0,
+        adaptive_arrow_min_sequence_gain=1,
+        adaptive_arrow_stop_on_url_change="true",
+        adaptive_arrow_max_steps=5,
+        adaptive_arrow_stable_rounds=2,
+        adaptive_arrow_presses_per_step=1,
+        adaptive_arrow_step_wait_ms=0,
+        smart_stop_min_steps=1,
+        smart_stop_stable_rounds=2,
+        smart_stop_min_sequence_length=3,
+        smart_stop_use_reader_boundary="false",
+        smart_stop_reader_boundary_min_sequence_length=20,
+        smart_stop_reader_boundary_recent_growth_window=20,
+        smart_stop_reader_boundary_stable_rounds=10,
+        large_sequence_mode_enabled="true",
+        large_sequence_min_length=20,
+        large_sequence_max_steps=1000,
+        large_sequence_step_wait_ms=0,
+        large_sequence_extend_while_growing="true",
+        large_sequence_stable_rounds=25,
+        sustained_arrow_down_enabled="false",
+        right_arrow_nav_enabled="true",
+        right_arrow_max_steps=5,
+        right_arrow_wait_ms=0,
+        right_arrow_stable_rounds=1,
+        right_arrow_presses_per_round=1,
+        right_arrow_stop_on_url_change="true",
+    )
+    discovered = []
+    seen = set()
+
+    def add_image(url: str, source: str) -> None:
+        if url in seen:
+            return
+        seen.add(url)
+        discovered.append({"url": url, "source": source})
+
+    page = FakePage()
+    diagnostics = worker._run_autonomous_capture(page, args, add_image, discovered, lambda: 0)
+
+    assert diagnostics["adaptiveArrowSelectedKey"] == "ArrowRight"
+    assert diagnostics["adaptiveArrowUrlChanged"] is True
+    assert diagnostics["adaptiveArrowStopReason"] == "url_changed"
+    assert [item["url"] for item in discovered] == [
+        "https://example.com/pages/01.webp",
+        "https://example.com/pages/02.webp",
+    ]
+
+
 def test_large_sequence_mode_triggers_after_min_sequence_length(monkeypatch) -> None:
     import app.services.browser_capture_worker as worker
 
@@ -4453,7 +5004,29 @@ def test_capture_worker_argparse_accepts_large_sequence_args() -> None:
             "--sustained-arrow-down-stable-rounds",
             "20",
             "--reader-navigation-strategy",
-            "right_arrow_only",
+            "adaptive_arrow",
+            "--adaptive-arrow-enabled",
+            "true",
+            "--adaptive-arrow-candidates",
+            "ArrowRight,ArrowDown",
+            "--adaptive-arrow-probe-rounds",
+            "3",
+            "--adaptive-arrow-presses-per-round",
+            "3",
+            "--adaptive-arrow-wait-ms",
+            "300",
+            "--adaptive-arrow-min-sequence-gain",
+            "1",
+            "--adaptive-arrow-stop-on-url-change",
+            "true",
+            "--adaptive-arrow-max-steps",
+            "1000",
+            "--adaptive-arrow-stable-rounds",
+            "20",
+            "--adaptive-arrow-presses-per-step",
+            "1",
+            "--adaptive-arrow-step-wait-ms",
+            "200",
             "--right-arrow-nav-enabled",
             "true",
             "--right-arrow-max-steps",
@@ -4484,7 +5057,18 @@ def test_capture_worker_argparse_accepts_large_sequence_args() -> None:
     assert args.sustained_arrow_down_press_delay_ms == 40
     assert args.sustained_arrow_down_round_wait_ms == 250
     assert args.sustained_arrow_down_stable_rounds == 20
-    assert args.reader_navigation_strategy == "right_arrow_only"
+    assert args.reader_navigation_strategy == "adaptive_arrow"
+    assert args.adaptive_arrow_enabled == "true"
+    assert args.adaptive_arrow_candidates == "ArrowRight,ArrowDown"
+    assert args.adaptive_arrow_probe_rounds == 3
+    assert args.adaptive_arrow_presses_per_round == 3
+    assert args.adaptive_arrow_wait_ms == 300
+    assert args.adaptive_arrow_min_sequence_gain == 1
+    assert args.adaptive_arrow_stop_on_url_change == "true"
+    assert args.adaptive_arrow_max_steps == 1000
+    assert args.adaptive_arrow_stable_rounds == 20
+    assert args.adaptive_arrow_presses_per_step == 1
+    assert args.adaptive_arrow_step_wait_ms == 200
     assert args.right_arrow_nav_enabled == "true"
     assert args.right_arrow_max_steps == 1000
     assert args.right_arrow_wait_ms == 250
@@ -4543,7 +5127,18 @@ def test_capture_parent_worker_cli_contract_includes_large_sequence_args(monkeyp
         sustained_arrow_down_press_delay_ms=40,
         sustained_arrow_down_round_wait_ms=250,
         sustained_arrow_down_stable_rounds=20,
-        reader_navigation_strategy="right_arrow_only",
+        reader_navigation_strategy="adaptive_arrow",
+        adaptive_arrow_enabled=True,
+        adaptive_arrow_candidates=["ArrowRight", "ArrowDown"],
+        adaptive_arrow_probe_rounds=3,
+        adaptive_arrow_presses_per_round=3,
+        adaptive_arrow_wait_ms=300,
+        adaptive_arrow_min_sequence_gain=1,
+        adaptive_arrow_stop_on_url_change=True,
+        adaptive_arrow_max_steps=1000,
+        adaptive_arrow_stable_rounds=20,
+        adaptive_arrow_presses_per_step=1,
+        adaptive_arrow_step_wait_ms=200,
         right_arrow_nav_enabled=True,
         right_arrow_max_steps=1000,
         right_arrow_wait_ms=250,
@@ -4571,7 +5166,18 @@ def test_capture_parent_worker_cli_contract_includes_large_sequence_args(monkeyp
     assert parsed.sustained_arrow_down_press_delay_ms == 40
     assert parsed.sustained_arrow_down_round_wait_ms == 250
     assert parsed.sustained_arrow_down_stable_rounds == 20
-    assert parsed.reader_navigation_strategy == "right_arrow_only"
+    assert parsed.reader_navigation_strategy == "adaptive_arrow"
+    assert parsed.adaptive_arrow_enabled == "true"
+    assert parsed.adaptive_arrow_candidates == "ArrowRight,ArrowDown"
+    assert parsed.adaptive_arrow_probe_rounds == 3
+    assert parsed.adaptive_arrow_presses_per_round == 3
+    assert parsed.adaptive_arrow_wait_ms == 300
+    assert parsed.adaptive_arrow_min_sequence_gain == 1
+    assert parsed.adaptive_arrow_stop_on_url_change == "true"
+    assert parsed.adaptive_arrow_max_steps == 1000
+    assert parsed.adaptive_arrow_stable_rounds == 20
+    assert parsed.adaptive_arrow_presses_per_step == 1
+    assert parsed.adaptive_arrow_step_wait_ms == 200
     assert parsed.right_arrow_nav_enabled == "true"
     assert parsed.right_arrow_max_steps == 1000
     assert parsed.right_arrow_wait_ms == 250

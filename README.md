@@ -83,6 +83,17 @@ BROWSER_SUSTAINED_ARROW_DOWN_PRESS_DELAY_MS=40
 BROWSER_SUSTAINED_ARROW_DOWN_ROUND_WAIT_MS=250
 BROWSER_SUSTAINED_ARROW_DOWN_STABLE_ROUNDS=20
 BROWSER_READER_NAVIGATION_STRATEGY=generic
+BROWSER_ADAPTIVE_ARROW_ENABLED=true
+BROWSER_ADAPTIVE_ARROW_CANDIDATES=ArrowRight,ArrowDown
+BROWSER_ADAPTIVE_ARROW_PROBE_ROUNDS=3
+BROWSER_ADAPTIVE_ARROW_PRESSES_PER_ROUND=3
+BROWSER_ADAPTIVE_ARROW_WAIT_MS=300
+BROWSER_ADAPTIVE_ARROW_MIN_SEQUENCE_GAIN=1
+BROWSER_ADAPTIVE_ARROW_STOP_ON_URL_CHANGE=true
+BROWSER_ADAPTIVE_ARROW_MAX_STEPS=1000
+BROWSER_ADAPTIVE_ARROW_STABLE_ROUNDS=20
+BROWSER_ADAPTIVE_ARROW_PRESSES_PER_STEP=1
+BROWSER_ADAPTIVE_ARROW_STEP_WAIT_MS=200
 BROWSER_RIGHT_ARROW_NAV_ENABLED=true
 BROWSER_RIGHT_ARROW_MAX_STEPS=1000
 BROWSER_RIGHT_ARROW_WAIT_MS=250
@@ -151,7 +162,18 @@ Project includes [.env.example](C:/Users/ilyas.abarbach/Documents/testing/.env.e
 - `BROWSER_SUSTAINED_ARROW_DOWN_PRESS_DELAY_MS`: delay between sustained ArrowDown presses
 - `BROWSER_SUSTAINED_ARROW_DOWN_ROUND_WAIT_MS`: wait after each sustained ArrowDown round
 - `BROWSER_SUSTAINED_ARROW_DOWN_STABLE_ROUNDS`: stable rounds that stop the sustained ArrowDown warm-up
-- `BROWSER_READER_NAVIGATION_STRATEGY`: `generic` or `right_arrow_only`
+- `BROWSER_READER_NAVIGATION_STRATEGY`: `generic`, `adaptive_arrow`, or `right_arrow_only`
+- `BROWSER_ADAPTIVE_ARROW_ENABLED`: enable adaptive arrow probing support
+- `BROWSER_ADAPTIVE_ARROW_CANDIDATES`: arrow keys probed in order, currently `ArrowRight,ArrowDown`
+- `BROWSER_ADAPTIVE_ARROW_PROBE_ROUNDS`: probe rounds per candidate before selection
+- `BROWSER_ADAPTIVE_ARROW_PRESSES_PER_ROUND`: repeated key presses per probe round
+- `BROWSER_ADAPTIVE_ARROW_WAIT_MS`: wait after each probe round
+- `BROWSER_ADAPTIVE_ARROW_MIN_SEQUENCE_GAIN`: minimum dominant-sequence gain needed to mark a candidate productive
+- `BROWSER_ADAPTIVE_ARROW_STOP_ON_URL_CHANGE`: mark a candidate unsafe when it changes the main page URL
+- `BROWSER_ADAPTIVE_ARROW_MAX_STEPS`: hard cap for traversal after a candidate key is selected
+- `BROWSER_ADAPTIVE_ARROW_STABLE_ROUNDS`: stable rounds required before adaptive traversal stops
+- `BROWSER_ADAPTIVE_ARROW_PRESSES_PER_STEP`: repeated presses per adaptive traversal step
+- `BROWSER_ADAPTIVE_ARROW_STEP_WAIT_MS`: wait after each adaptive traversal step
 - `BROWSER_RIGHT_ARROW_NAV_ENABLED`: enable deterministic right-arrow-only traversal support
 - `BROWSER_RIGHT_ARROW_MAX_STEPS`: hard cap for right-arrow-only traversal steps
 - `BROWSER_RIGHT_ARROW_WAIT_MS`: wait after each right-arrow traversal round
@@ -287,9 +309,23 @@ Browser preview mode can use either:
 
 ### Autonomous capture navigation
 
-Autonomous capture now supports two generic navigation strategies:
+Autonomous capture now supports three generic navigation strategies:
 - `generic`: existing mixed exploration using scroll, wheel, and safe keyboard actions
+- `adaptive_arrow`: probe `ArrowRight` and `ArrowDown`, reject unsafe keys, and keep only the safe productive arrow
 - `right_arrow_only`: deterministic reader traversal that repeatedly sends `ArrowRight`
+
+Use `BROWSER_READER_NAVIGATION_STRATEGY=adaptive_arrow` when reader behavior varies between chapters and some URLs respond to `ArrowRight` while others respond to `ArrowDown`.
+
+Why `adaptive_arrow` exists:
+- some readers advance through images with `ArrowRight`
+- some readers advance through images with `ArrowDown`
+- some readers use one of those keys to navigate away to another chapter or URL
+- adaptive probing measures safe sequence/image growth and excludes unsafe keys that change the URL
+
+URL safety:
+- the probe records the original chapter URL before testing each candidate
+- if a candidate changes the main page URL, that candidate is marked unsafe and excluded
+- traversal also stops immediately if the selected arrow later changes the URL
 
 Use `BROWSER_READER_NAVIGATION_STRATEGY=right_arrow_only` for readers where repeated `ArrowRight` advances through one image/page at a time.
 
@@ -301,12 +337,19 @@ Why this exists:
 Recommended demo config for these readers:
 
 ```env
+BROWSER_READER_NAVIGATION_STRATEGY=adaptive_arrow
+```
+
+For readers that are already known to require only `ArrowRight`:
+
+```env
 BROWSER_READER_NAVIGATION_STRATEGY=right_arrow_only
 ```
 
 Limitations:
 - this remains generic, not site-specific
 - some readers may still need longer `durationSeconds`
+- adaptive probing currently tests only `ArrowRight` and `ArrowDown`
 - the strategy intentionally avoids other navigation keys in this mode, so it may be slower than a site-specific automation approach
 
 For Windows/Uvicorn stability, browser preview is isolated in a separate Python worker process instead of running Playwright directly inside the main API server process.

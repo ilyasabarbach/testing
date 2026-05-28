@@ -292,6 +292,25 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
     )
     parser.add_argument("--reader-navigation-strategy", default="generic")
+    parser.add_argument("--adaptive-arrow-enabled", default="true")
+    parser.add_argument("--adaptive-arrow-candidates", default="ArrowRight,ArrowDown")
+    parser.add_argument("--adaptive-arrow-probe-rounds", default=3, type=int)
+    parser.add_argument(
+        "--adaptive-arrow-presses-per-round",
+        default=3,
+        type=int,
+    )
+    parser.add_argument("--adaptive-arrow-wait-ms", default=300, type=int)
+    parser.add_argument("--adaptive-arrow-min-sequence-gain", default=1, type=int)
+    parser.add_argument("--adaptive-arrow-stop-on-url-change", default="true")
+    parser.add_argument("--adaptive-arrow-max-steps", default=1000, type=int)
+    parser.add_argument("--adaptive-arrow-stable-rounds", default=20, type=int)
+    parser.add_argument(
+        "--adaptive-arrow-presses-per-step",
+        default=1,
+        type=int,
+    )
+    parser.add_argument("--adaptive-arrow-step-wait-ms", default=200, type=int)
     parser.add_argument("--right-arrow-nav-enabled", default="true")
     parser.add_argument("--right-arrow-max-steps", default=1000, type=int)
     parser.add_argument("--right-arrow-wait-ms", default=250, type=int)
@@ -368,7 +387,7 @@ def _run_autonomous_capture(
             get_network_image_count=get_network_image_count,
             last_network_image_count=last_network_image_count,
         )
-        if diagnostics["readerNavigationStrategy"] != "right_arrow_only"
+        if diagnostics["readerNavigationStrategy"] == "generic"
         else (
             diagnostics,
             productive_action_counts,
@@ -378,6 +397,44 @@ def _run_autonomous_capture(
             last_network_growth_step,
         )
     )
+    if diagnostics["readerNavigationStrategy"] == "adaptive_arrow":
+        (
+            diagnostics,
+            productive_action_counts,
+            last_sequence_length,
+            last_sequence_growth_step,
+            last_network_image_count,
+            last_network_growth_step,
+            selected_key,
+        ) = _run_adaptive_arrow_probe(
+            page=page,
+            args=args,
+            add_image=add_image,
+            discovered=discovered,
+            deadline=deadline,
+            diagnostics=diagnostics,
+            productive_action_counts=productive_action_counts,
+            get_network_image_count=get_network_image_count,
+            last_network_image_count=last_network_image_count,
+        )
+        if selected_key:
+            return _run_adaptive_arrow_traversal(
+                page=page,
+                args=args,
+                add_image=add_image,
+                discovered=discovered,
+                deadline=deadline,
+                diagnostics=diagnostics,
+                productive_action_counts=productive_action_counts,
+                selected_key=selected_key,
+                get_network_image_count=get_network_image_count,
+                last_network_image_count=last_network_image_count,
+            )
+        actions = _filter_adaptive_unsafe_actions(
+            actions,
+            set(diagnostics["adaptiveArrowUnsafeKeys"]),
+        )
+        action_lookup = _build_action_lookup(actions)
     if diagnostics["readerNavigationStrategy"] == "right_arrow_only":
         return _run_right_arrow_only_phase(
             page=page,
@@ -863,6 +920,356 @@ def _run_right_arrow_only_phase(
     return diagnostics
 
 
+def _run_adaptive_arrow_probe(
+    page,
+    args,
+    add_image,
+    discovered: list[dict],
+    deadline: float,
+    diagnostics: dict,
+    productive_action_counts: dict[str, int],
+    get_network_image_count=None,
+    last_network_image_count: int = 0,
+) -> tuple[dict, dict[str, int], int, int, int, int, str]:
+    candidates = _parse_adaptive_arrow_candidates(
+        getattr(args, "adaptive_arrow_candidates", "ArrowRight,ArrowDown")
+    )
+    diagnostics["adaptiveArrowCandidates"] = candidates
+    diagnostics["adaptiveArrowProbeRounds"] = int(
+        getattr(args, "adaptive_arrow_probe_rounds", 3)
+    )
+    diagnostics["adaptiveArrowSequenceBefore"] = _dominant_sequence_length(discovered)
+    diagnostics["adaptiveArrowSequenceAfter"] = diagnostics["adaptiveArrowSequenceBefore"]
+    diagnostics["adaptiveArrowInitialUrl"] = _current_page_url(page)
+    diagnostics["adaptiveArrowFinalUrl"] = diagnostics["adaptiveArrowInitialUrl"]
+
+    if not diagnostics["adaptiveArrowEnabled"]:
+        diagnostics["adaptiveArrowNoProductiveKeyFound"] = True
+        diagnostics["adaptiveArrowStopReason"] = "disabled"
+        return (
+            diagnostics,
+            productive_action_counts,
+            diagnostics["adaptiveArrowSequenceBefore"],
+            0,
+            last_network_image_count,
+            0,
+            "",
+        )
+
+    probe_rounds = int(getattr(args, "adaptive_arrow_probe_rounds", 3))
+    presses_per_round = int(getattr(args, "adaptive_arrow_presses_per_round", 3))
+    wait_ms = int(getattr(args, "adaptive_arrow_wait_ms", 300))
+    min_sequence_gain = int(getattr(args, "adaptive_arrow_min_sequence_gain", 1))
+    stop_on_url_change = _is_true(
+        getattr(args, "adaptive_arrow_stop_on_url_change", "true")
+    )
+    initial_url = diagnostics["adaptiveArrowInitialUrl"]
+    best_result: dict | None = None
+    best_additions: list[dict] = []
+
+    for key in candidates:
+        local_items = [dict(item) for item in discovered]
+        local_seen = {str(item.get("url", "")) for item in local_items}
+        sequence_before = _dominant_sequence_length(local_items)
+        image_count_before = len(local_items)
+        probe_result = {
+            "key": key,
+            "urlChanged": False,
+            "unsafe": False,
+            "sequenceBefore": sequence_before,
+            "sequenceAfter": sequence_before,
+            "sequenceGain": 0,
+            "imageCountBefore": image_count_before,
+            "imageCountAfter": image_count_before,
+            "imageCountGain": 0,
+            "selectedAsNavigationKey": False,
+        }
+        local_additions: list[dict] = []
+        if time.monotonic() >= deadline:
+            diagnostics["adaptiveArrowStopReason"] = "duration_elapsed"
+            diagnostics["adaptiveArrowProbeResults"].append(probe_result)
+            break
+        try:
+            page.evaluate("() => { if (document.body) document.body.focus(); }")
+        except Exception:
+            pass
+
+        for _ in range(probe_rounds):
+            for _ in range(presses_per_round):
+                if time.monotonic() >= deadline:
+                    diagnostics["adaptiveArrowStopReason"] = "duration_elapsed"
+                    break
+                try:
+                    page.keyboard.press(key)
+                except Exception:
+                    diagnostics["autonomousActionFailureCount"] += 1
+            if diagnostics["adaptiveArrowStopReason"] == "duration_elapsed":
+                break
+            if wait_ms > 0:
+                page.wait_for_timeout(wait_ms)
+            current_url = _current_page_url(page)
+            if stop_on_url_change and initial_url and current_url and current_url != initial_url:
+                probe_result["urlChanged"] = True
+                probe_result["unsafe"] = True
+                diagnostics["adaptiveArrowUnsafeKeys"].append(key)
+                _restore_probe_page(page, initial_url, args)
+                break
+            for url in _scan_dom_image_urls(page):
+                if url in local_seen:
+                    continue
+                local_seen.add(url)
+                item = {"url": url, "source": "dom"}
+                local_items.append(item)
+                local_additions.append(item)
+
+        probe_result["sequenceAfter"] = _dominant_sequence_length(local_items)
+        probe_result["sequenceGain"] = (
+            probe_result["sequenceAfter"] - probe_result["sequenceBefore"]
+        )
+        probe_result["imageCountAfter"] = len(local_items)
+        probe_result["imageCountGain"] = (
+            probe_result["imageCountAfter"] - probe_result["imageCountBefore"]
+        )
+        productive = (
+            not probe_result["unsafe"]
+            and (
+                probe_result["sequenceGain"] >= min_sequence_gain
+                or probe_result["imageCountGain"] > 0
+            )
+        )
+        if productive:
+            diagnostics["adaptiveArrowProductiveKeys"].append(key)
+            if best_result is None or _adaptive_probe_score(probe_result) > _adaptive_probe_score(best_result):
+                best_result = probe_result
+                best_additions = local_additions
+        diagnostics["adaptiveArrowProbeResults"].append(probe_result)
+        _restore_probe_page(page, initial_url, args)
+
+    selected_key = ""
+    if best_result is not None:
+        best_result["selectedAsNavigationKey"] = True
+        selected_key = str(best_result["key"])
+        diagnostics["adaptiveArrowSelectedKey"] = selected_key
+        for item in best_additions:
+            add_image(item["url"], item["source"])
+        diagnostics["adaptiveArrowSequenceAfter"] = _dominant_sequence_length(discovered)
+        diagnostics["adaptiveArrowFinalUrl"] = _current_page_url(page)
+    else:
+        diagnostics["adaptiveArrowNoProductiveKeyFound"] = True
+        diagnostics["adaptiveArrowStopReason"] = (
+            diagnostics["adaptiveArrowStopReason"] or "no_productive_key"
+        )
+        diagnostics["notes"].append(
+            "Adaptive arrow probe found no safe productive arrow and fell back to generic exploration."
+        )
+
+    return (
+        diagnostics,
+        productive_action_counts,
+        _dominant_sequence_length(discovered),
+        0,
+        int(get_network_image_count()) if callable(get_network_image_count) else last_network_image_count,
+        0,
+        selected_key,
+    )
+
+
+def _run_adaptive_arrow_traversal(
+    page,
+    args,
+    add_image,
+    discovered: list[dict],
+    deadline: float,
+    diagnostics: dict,
+    productive_action_counts: dict[str, int],
+    selected_key: str,
+    get_network_image_count=None,
+    last_network_image_count: int = 0,
+) -> dict:
+    diagnostics["adaptiveArrowSelectedKey"] = selected_key
+    diagnostics["adaptiveArrowSequenceBefore"] = _dominant_sequence_length(discovered)
+    diagnostics["adaptiveArrowInitialUrl"] = _current_page_url(page)
+    diagnostics["adaptiveArrowFinalUrl"] = diagnostics["adaptiveArrowInitialUrl"]
+    last_sequence_length = diagnostics["adaptiveArrowSequenceBefore"]
+    last_sequence_growth_step = 0
+    last_network_growth_step = 0
+    stable_rounds = 0
+    steps_executed = 0
+    stop_policy = getattr(args, "stop_policy", "sequence_stable")
+    max_steps = int(getattr(args, "adaptive_arrow_max_steps", 1000))
+    presses_per_step = int(getattr(args, "adaptive_arrow_presses_per_step", 1))
+    step_wait_ms = int(getattr(args, "adaptive_arrow_step_wait_ms", 200))
+    stable_rounds_required = int(getattr(args, "adaptive_arrow_stable_rounds", 20))
+    stop_on_url_change = _is_true(
+        getattr(args, "adaptive_arrow_stop_on_url_change", "true")
+    )
+    initial_url = diagnostics["adaptiveArrowInitialUrl"]
+
+    for step_index in range(max_steps):
+        if time.monotonic() >= deadline:
+            diagnostics["adaptiveArrowStopReason"] = "duration_elapsed"
+            break
+        try:
+            page.evaluate("() => { if (document.body) document.body.focus(); }")
+        except Exception:
+            pass
+        for _ in range(presses_per_step):
+            if time.monotonic() >= deadline:
+                diagnostics["adaptiveArrowStopReason"] = "duration_elapsed"
+                break
+            try:
+                page.keyboard.press(selected_key)
+                diagnostics["adaptiveArrowPressesSent"] += 1
+            except Exception:
+                diagnostics["autonomousActionFailureCount"] += 1
+        if diagnostics["adaptiveArrowStopReason"] == "duration_elapsed":
+            break
+        if step_wait_ms > 0:
+            page.wait_for_timeout(step_wait_ms)
+        current_url = _current_page_url(page)
+        diagnostics["adaptiveArrowFinalUrl"] = current_url
+        if stop_on_url_change and initial_url and current_url and current_url != initial_url:
+            diagnostics["adaptiveArrowUrlChanged"] = True
+            diagnostics["adaptiveArrowStopReason"] = "url_changed"
+            break
+        for url in _scan_dom_image_urls(page):
+            add_image(url, "dom")
+
+        steps_executed = step_index + 1
+        diagnostics["adaptiveArrowStepsExecuted"] = steps_executed
+        current_sequence_length = _dominant_sequence_length(discovered)
+        diagnostics["readerBoundarySuspected"] = (
+            _detect_reader_boundary(page)
+            if _is_true(getattr(args, "smart_stop_use_reader_boundary", "true"))
+            else False
+        )
+        current_network_image_count = (
+            int(get_network_image_count()) if callable(get_network_image_count) else 0
+        )
+        if current_network_image_count > last_network_image_count:
+            last_network_growth_step = steps_executed
+        last_network_image_count = current_network_image_count
+
+        if current_sequence_length > last_sequence_length:
+            stable_rounds = 0
+            last_sequence_growth_step = steps_executed
+            diagnostics["adaptiveArrowGrowthEvents"] += 1
+            diagnostics["sequenceGrowthEvents"] += 1
+            diagnostics["lastProductiveAction"] = f"adaptive_arrow_{selected_key.lower()}"
+            productive_action_counts[diagnostics["lastProductiveAction"]] = (
+                productive_action_counts.get(diagnostics["lastProductiveAction"], 0) + 1
+            )
+            diagnostics["productiveActions"] = _sorted_productive_actions(
+                productive_action_counts
+            )
+        else:
+            stable_rounds += 1
+
+        last_sequence_length = current_sequence_length
+        diagnostics["adaptiveArrowSequenceAfter"] = current_sequence_length
+        diagnostics["adaptiveArrowStableRounds"] = stable_rounds
+        diagnostics["carouselStepsExecuted"] = steps_executed
+        diagnostics["autonomousActionsUsed"].append(
+            f"adaptive_arrow_{selected_key.lower()}"
+        )
+
+        if _should_enable_large_sequence_mode(diagnostics, current_sequence_length):
+            diagnostics["largeSequenceModeTriggered"] = True
+        if diagnostics["largeSequenceModeTriggered"]:
+            diagnostics["largeSequenceStepsExecuted"] += 1
+
+        if stop_policy == "duration":
+            continue
+        if stop_policy == "sequence_stable" and stable_rounds >= stable_rounds_required:
+            diagnostics["adaptiveArrowStopReason"] = "adaptive_arrow_sequence_stable"
+            diagnostics["autonomousStopReason"] = "adaptive_arrow_sequence_stable"
+            diagnostics["stoppedBecauseSequenceStable"] = True
+            break
+        if stop_policy == "smart" and stable_rounds >= stable_rounds_required:
+            smart_reason = _evaluate_smart_stop(
+                diagnostics=diagnostics,
+                step=steps_executed,
+                stable_rounds=stable_rounds,
+                current_sequence_length=current_sequence_length,
+                last_network_growth_step=last_network_growth_step,
+                last_sequence_growth_step=last_sequence_growth_step,
+            )
+            if smart_reason:
+                diagnostics["smartStopTriggered"] = True
+                diagnostics["smartStopReason"] = smart_reason
+                diagnostics["autonomousStopReason"] = smart_reason
+                diagnostics["adaptiveArrowStopReason"] = smart_reason
+                diagnostics["stoppedBecauseSequenceStable"] = (
+                    smart_reason == "smart_sequence_complete"
+                )
+                if diagnostics["largeSequenceModeTriggered"]:
+                    diagnostics["largeSequenceStopReason"] = smart_reason
+                break
+    else:
+        diagnostics["adaptiveArrowStopReason"] = "max_steps_reached"
+
+    if diagnostics["adaptiveArrowStopReason"] == "none":
+        diagnostics["adaptiveArrowStopReason"] = "duration_elapsed"
+
+    diagnostics["autonomousStepsExecuted"] = steps_executed
+    diagnostics["imageCountStableRounds"] = stable_rounds
+    diagnostics["sequenceStableRounds"] = stable_rounds
+    diagnostics["imageCountAfterAutonomousActions"] = len(discovered)
+    diagnostics["sequenceLengthAfterExploration"] = _dominant_sequence_length(discovered)
+    diagnostics["lastSequenceGrowthStep"] = last_sequence_growth_step
+    if diagnostics["largeSequenceModeTriggered"] and diagnostics["largeSequenceStopReason"] == "none":
+        diagnostics["largeSequenceStopReason"] = diagnostics["adaptiveArrowStopReason"]
+    if stop_policy == "duration":
+        diagnostics["autonomousStopReason"] = diagnostics["adaptiveArrowStopReason"]
+        diagnostics["stoppedBecauseSequenceStable"] = False
+    elif diagnostics["autonomousStopReason"] == "none":
+        diagnostics["autonomousStopReason"] = diagnostics["adaptiveArrowStopReason"]
+    return diagnostics
+
+
+def _filter_adaptive_unsafe_actions(
+    actions: list[tuple[str, object]],
+    unsafe_keys: set[str],
+) -> list[tuple[str, object]]:
+    filtered: list[tuple[str, object]] = []
+    for action_name, action in actions:
+        if action_name == "keyboard_arrowright" and "ArrowRight" in unsafe_keys:
+            continue
+        if action_name == "keyboard_arrowdown" and "ArrowDown" in unsafe_keys:
+            continue
+        filtered.append((action_name, action))
+    return filtered
+
+
+def _parse_adaptive_arrow_candidates(raw_value: str) -> list[str]:
+    allowed = {"ArrowRight", "ArrowDown"}
+    candidates = [value.strip() for value in str(raw_value).split(",") if value.strip()]
+    normalized = [value for value in candidates if value in allowed]
+    return normalized or ["ArrowRight", "ArrowDown"]
+
+
+def _adaptive_probe_score(result: dict) -> tuple[int, int, int]:
+    candidate_priority = {"ArrowRight": 0, "ArrowDown": 1}
+    return (
+        int(result["sequenceGain"]),
+        int(result["imageCountGain"]),
+        -candidate_priority.get(str(result["key"]), 99),
+    )
+
+
+def _restore_probe_page(page, original_url: str, args) -> None:
+    try:
+        page.goto(
+            original_url,
+            wait_until="domcontentloaded",
+            timeout=getattr(args, "timeout_ms", 15000),
+        )
+        page.wait_for_timeout(250)
+        page.evaluate("() => { if (document.body) document.body.focus(); }")
+    except Exception:
+        return
+
+
 def _should_enable_large_sequence_mode(
     diagnostics: dict,
     current_sequence_length: int,
@@ -1189,7 +1596,7 @@ def _default_autonomous_diagnostics(args, image_count_before_actions: int) -> di
         "sustainedArrowDownEnabled": _normalized_navigation_strategy(
             getattr(args, "reader_navigation_strategy", "generic")
         )
-        != "right_arrow_only"
+        == "generic"
         and _is_true(getattr(args, "sustained_arrow_down_enabled", "true")),
         "sustainedArrowDownRoundsExecuted": 0,
         "sustainedArrowDownPressesSent": 0,
@@ -1202,6 +1609,32 @@ def _default_autonomous_diagnostics(args, image_count_before_actions: int) -> di
         "readerNavigationStrategy": _normalized_navigation_strategy(
             getattr(args, "reader_navigation_strategy", "generic")
         ),
+        "adaptiveArrowEnabled": _normalized_navigation_strategy(
+            getattr(args, "reader_navigation_strategy", "generic")
+        )
+        == "adaptive_arrow"
+        and _is_true(getattr(args, "adaptive_arrow_enabled", "true")),
+        "adaptiveArrowCandidates": _parse_adaptive_arrow_candidates(
+            getattr(args, "adaptive_arrow_candidates", "ArrowRight,ArrowDown")
+        ),
+        "adaptiveArrowSelectedKey": "",
+        "adaptiveArrowProbeRounds": int(
+            getattr(args, "adaptive_arrow_probe_rounds", 3)
+        ),
+        "adaptiveArrowProbeResults": [],
+        "adaptiveArrowUnsafeKeys": [],
+        "adaptiveArrowProductiveKeys": [],
+        "adaptiveArrowNoProductiveKeyFound": False,
+        "adaptiveArrowStepsExecuted": 0,
+        "adaptiveArrowPressesSent": 0,
+        "adaptiveArrowSequenceBefore": 0,
+        "adaptiveArrowSequenceAfter": 0,
+        "adaptiveArrowGrowthEvents": 0,
+        "adaptiveArrowStableRounds": 0,
+        "adaptiveArrowStopReason": "none",
+        "adaptiveArrowUrlChanged": False,
+        "adaptiveArrowInitialUrl": "",
+        "adaptiveArrowFinalUrl": "",
         "rightArrowNavigationEnabled": _is_true(
             getattr(args, "right_arrow_nav_enabled", "true")
         ),
@@ -1230,6 +1663,8 @@ def _default_autonomous_diagnostics(args, image_count_before_actions: int) -> di
 
 def _capture_mode_note(capture_mode: str, navigation_strategy: str = "generic") -> str:
     if capture_mode == "autonomous":
+        if navigation_strategy == "adaptive_arrow":
+            return "Autonomous capture used adaptive arrow probing to choose a safe productive navigation key."
         if navigation_strategy == "right_arrow_only":
             return "Autonomous capture used deterministic ArrowRight-only reader traversal."
         return "Autonomous capture used generic scroll, wheel, and keyboard exploration."
@@ -1258,7 +1693,7 @@ def _normalized_navigation_strategy(value: str) -> str:
     normalized = str(value).strip().lower()
     if normalized == "down_arrow_only":
         return "right_arrow_only"
-    if normalized in {"generic", "right_arrow_only"}:
+    if normalized in {"generic", "right_arrow_only", "adaptive_arrow"}:
         return normalized
     return "generic"
 
