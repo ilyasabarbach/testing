@@ -123,6 +123,9 @@ Project includes [.env.example](C:/Users/ilyas.abarbach/Documents/testing/.env.e
 - `BROWSER_SMART_STOP_STABLE_ROUNDS`: stable dominant-sequence rounds required by smart stop
 - `BROWSER_SMART_STOP_MIN_SEQUENCE_LENGTH`: minimum dominant sequence length before smart stop can trigger
 - `BROWSER_SMART_STOP_USE_READER_BOUNDARY`: allow generic comment/discussion/reviews boundary hints to end smart mode faster
+- `BROWSER_SMART_STOP_READER_BOUNDARY_MIN_SEQUENCE_LENGTH`: minimum dominant sequence length before reader-boundary smart stop is allowed
+- `BROWSER_SMART_STOP_READER_BOUNDARY_RECENT_GROWTH_WINDOW`: blocks reader-boundary smart stop when the sequence grew recently
+- `BROWSER_SMART_STOP_READER_BOUNDARY_STABLE_ROUNDS`: extra stable rounds required before reader-boundary smart stop is allowed
 - `BROWSER_LARGE_SEQUENCE_MODE_ENABLED`: enable adaptive long-chapter exploration mode
 - `BROWSER_LARGE_SEQUENCE_MIN_LENGTH`: dominant sequence length that turns on large sequence mode
 - `BROWSER_LARGE_SEQUENCE_MAX_STEPS`: hard step cap for large sequence mode
@@ -485,7 +488,7 @@ Persistent capture profile:
 - if persistent mode is enabled without user data dir, API returns `Persistent browser context requires BROWSER_USER_DATA_DIR.`
 
 Use capture when browser preview sees only first virtual slides and more images load only after reader interaction. Autonomous mode is generic exploration, not site-specific automation.
-Smart stop can finish before full timeout when dominant numeric sequence stops growing after enough exploration. It may also stop earlier when a generic comments/discussion/reviews boundary is detected after a stable sequence. It remains heuristic and does not guarantee perfect chapter-end detection on every site.
+Smart stop can finish before full timeout when dominant numeric sequence stops growing after enough exploration. Generic reader-boundary stopping is now more conservative: it requires minimum sequence length, enough stable rounds, and no recent sequence growth. Reader-boundary help can still be disabled completely with `BROWSER_SMART_STOP_USE_READER_BOUNDARY=false`. Validated URLs can use smart stop comfortably, while unknown URLs are safer with conservative reader-boundary settings.
 Large sequence mode helps long chapters continue beyond the normal action budget when the dominant numeric sequence is already large and still growing. It also prioritizes actions that recently increased sequence length. Long chapters may still require higher `durationSeconds` values when pages load slowly.
 
 ### Batch processing endpoints

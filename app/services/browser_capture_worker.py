@@ -243,6 +243,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--smart-stop-stable-rounds", default=8, type=int)
     parser.add_argument("--smart-stop-min-sequence-length", default=3, type=int)
     parser.add_argument("--smart-stop-use-reader-boundary", default="true")
+    parser.add_argument(
+        "--smart-stop-reader-boundary-min-sequence-length",
+        default=20,
+        type=int,
+    )
+    parser.add_argument(
+        "--smart-stop-reader-boundary-recent-growth-window",
+        default=20,
+        type=int,
+    )
+    parser.add_argument(
+        "--smart-stop-reader-boundary-stable-rounds",
+        default=10,
+        type=int,
+    )
     parser.add_argument("--large-sequence-mode-enabled", default="true")
     parser.add_argument("--large-sequence-min-length", default=20, type=int)
     parser.add_argument("--large-sequence-max-steps", default=1000, type=int)
@@ -409,6 +424,7 @@ def _run_autonomous_capture(
                 stable_rounds=stable_rounds,
                 current_sequence_length=current_sequence_length,
                 last_network_growth_step=last_network_growth_step,
+                last_sequence_growth_step=last_sequence_growth_step,
             )
             if smart_reason:
                 diagnostics["smartStopTriggered"] = True
@@ -457,6 +473,7 @@ def _evaluate_smart_stop(
     stable_rounds: int,
     current_sequence_length: int,
     last_network_growth_step: int,
+    last_sequence_growth_step: int,
 ) -> str | None:
     if step < diagnostics["smartStopMinSteps"]:
         return None
@@ -472,6 +489,19 @@ def _evaluate_smart_stop(
     if last_network_growth_step and step - last_network_growth_step < 2:
         return None
     if diagnostics["readerBoundarySuspected"]:
+        if current_sequence_length < diagnostics["readerBoundaryMinSequenceLength"]:
+            diagnostics["readerBoundaryBlockedBecauseSequenceTooSmall"] = True
+            return None
+        if (
+            last_sequence_growth_step
+            and step - last_sequence_growth_step
+            <= diagnostics["readerBoundaryRecentGrowthWindow"]
+        ):
+            diagnostics["readerBoundaryBlockedBecauseRecentGrowth"] = True
+            return None
+        if stable_rounds < diagnostics["readerBoundaryStableRoundsRequired"]:
+            diagnostics["readerBoundaryBlockedBecauseNotStableEnough"] = True
+            return None
         return "smart_reader_boundary"
     return "smart_sequence_complete"
 
@@ -759,6 +789,30 @@ def _default_autonomous_diagnostics(args, image_count_before_actions: int) -> di
         "smartStopTriggered": False,
         "smartStopReason": "none",
         "readerBoundarySuspected": False,
+        "readerBoundaryMinSequenceLength": int(
+            getattr(
+                args,
+                "smart_stop_reader_boundary_min_sequence_length",
+                20,
+            )
+        ),
+        "readerBoundaryRecentGrowthWindow": int(
+            getattr(
+                args,
+                "smart_stop_reader_boundary_recent_growth_window",
+                20,
+            )
+        ),
+        "readerBoundaryStableRoundsRequired": int(
+            getattr(
+                args,
+                "smart_stop_reader_boundary_stable_rounds",
+                10,
+            )
+        ),
+        "readerBoundaryBlockedBecauseSequenceTooSmall": False,
+        "readerBoundaryBlockedBecauseRecentGrowth": False,
+        "readerBoundaryBlockedBecauseNotStableEnough": False,
         "lastSequenceGrowthStep": 0,
         "largeSequenceModeEnabled": _is_true(
             getattr(args, "large_sequence_mode_enabled", "true")

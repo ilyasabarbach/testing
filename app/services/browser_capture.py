@@ -68,6 +68,9 @@ async def capture_chapter_images(
         smart_stop_stable_rounds=settings.browser_smart_stop_stable_rounds,
         smart_stop_min_sequence_length=settings.browser_smart_stop_min_sequence_length,
         smart_stop_use_reader_boundary=settings.browser_smart_stop_use_reader_boundary,
+        smart_stop_reader_boundary_min_sequence_length=settings.browser_smart_stop_reader_boundary_min_sequence_length,
+        smart_stop_reader_boundary_recent_growth_window=settings.browser_smart_stop_reader_boundary_recent_growth_window,
+        smart_stop_reader_boundary_stable_rounds=settings.browser_smart_stop_reader_boundary_stable_rounds,
         large_sequence_mode_enabled=settings.browser_large_sequence_mode_enabled,
         large_sequence_min_length=settings.browser_large_sequence_min_length,
         large_sequence_max_steps=settings.browser_large_sequence_max_steps,
@@ -173,6 +176,33 @@ async def capture_chapter_images(
             smartStopReason=str(payload.get("smartStopReason", "none")),
             readerBoundarySuspected=bool(
                 payload.get("readerBoundarySuspected", False)
+            ),
+            readerBoundaryMinSequenceLength=int(
+                payload.get("readerBoundaryMinSequenceLength", 0)
+            ),
+            readerBoundaryRecentGrowthWindow=int(
+                payload.get("readerBoundaryRecentGrowthWindow", 0)
+            ),
+            readerBoundaryStableRoundsRequired=int(
+                payload.get("readerBoundaryStableRoundsRequired", 0)
+            ),
+            readerBoundaryBlockedBecauseSequenceTooSmall=bool(
+                payload.get(
+                    "readerBoundaryBlockedBecauseSequenceTooSmall",
+                    False,
+                )
+            ),
+            readerBoundaryBlockedBecauseRecentGrowth=bool(
+                payload.get(
+                    "readerBoundaryBlockedBecauseRecentGrowth",
+                    False,
+                )
+            ),
+            readerBoundaryBlockedBecauseNotStableEnough=bool(
+                payload.get(
+                    "readerBoundaryBlockedBecauseNotStableEnough",
+                    False,
+                )
             ),
             lastSequenceGrowthStep=int(payload.get("lastSequenceGrowthStep", 0)),
             largeSequenceModeEnabled=bool(
@@ -367,6 +397,9 @@ def build_capture_worker_command(
     smart_stop_stable_rounds: int,
     smart_stop_min_sequence_length: int,
     smart_stop_use_reader_boundary: bool,
+    smart_stop_reader_boundary_min_sequence_length: int,
+    smart_stop_reader_boundary_recent_growth_window: int,
+    smart_stop_reader_boundary_stable_rounds: int,
     large_sequence_mode_enabled: bool,
     large_sequence_min_length: int,
     large_sequence_max_steps: int,
@@ -429,6 +462,12 @@ def build_capture_worker_command(
         str(smart_stop_min_sequence_length),
         "--smart-stop-use-reader-boundary",
         "true" if smart_stop_use_reader_boundary else "false",
+        "--smart-stop-reader-boundary-min-sequence-length",
+        str(smart_stop_reader_boundary_min_sequence_length),
+        "--smart-stop-reader-boundary-recent-growth-window",
+        str(smart_stop_reader_boundary_recent_growth_window),
+        "--smart-stop-reader-boundary-stable-rounds",
+        str(smart_stop_reader_boundary_stable_rounds),
         "--large-sequence-mode-enabled",
         "true" if large_sequence_mode_enabled else "false",
         "--large-sequence-min-length",

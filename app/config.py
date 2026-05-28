@@ -59,6 +59,9 @@ class Settings:
     browser_smart_stop_stable_rounds: int
     browser_smart_stop_min_sequence_length: int
     browser_smart_stop_use_reader_boundary: bool
+    browser_smart_stop_reader_boundary_min_sequence_length: int
+    browser_smart_stop_reader_boundary_recent_growth_window: int
+    browser_smart_stop_reader_boundary_stable_rounds: int
     browser_large_sequence_mode_enabled: bool
     browser_large_sequence_min_length: int
     browser_large_sequence_max_steps: int
@@ -183,6 +186,18 @@ def get_settings() -> Settings:
         os.getenv("BROWSER_SMART_STOP_USE_READER_BOUNDARY", "true"),
         True,
     )
+    smart_stop_reader_boundary_min_sequence_length_raw = os.getenv(
+        "BROWSER_SMART_STOP_READER_BOUNDARY_MIN_SEQUENCE_LENGTH",
+        "20",
+    ).strip()
+    smart_stop_reader_boundary_recent_growth_window_raw = os.getenv(
+        "BROWSER_SMART_STOP_READER_BOUNDARY_RECENT_GROWTH_WINDOW",
+        "20",
+    ).strip()
+    smart_stop_reader_boundary_stable_rounds_raw = os.getenv(
+        "BROWSER_SMART_STOP_READER_BOUNDARY_STABLE_ROUNDS",
+        "10",
+    ).strip()
     browser_large_sequence_mode_enabled = _parse_bool(
         os.getenv("BROWSER_LARGE_SEQUENCE_MODE_ENABLED", "true"),
         True,
@@ -287,6 +302,24 @@ def get_settings() -> Settings:
     except ValueError:
         browser_smart_stop_min_sequence_length = 3
     try:
+        browser_smart_stop_reader_boundary_min_sequence_length = int(
+            smart_stop_reader_boundary_min_sequence_length_raw
+        )
+    except ValueError:
+        browser_smart_stop_reader_boundary_min_sequence_length = 20
+    try:
+        browser_smart_stop_reader_boundary_recent_growth_window = int(
+            smart_stop_reader_boundary_recent_growth_window_raw
+        )
+    except ValueError:
+        browser_smart_stop_reader_boundary_recent_growth_window = 20
+    try:
+        browser_smart_stop_reader_boundary_stable_rounds = int(
+            smart_stop_reader_boundary_stable_rounds_raw
+        )
+    except ValueError:
+        browser_smart_stop_reader_boundary_stable_rounds = 10
+    try:
         browser_large_sequence_min_length = int(large_sequence_min_length_raw)
     except ValueError:
         browser_large_sequence_min_length = 20
@@ -343,6 +376,12 @@ def get_settings() -> Settings:
         browser_smart_stop_stable_rounds = 8
     if browser_smart_stop_min_sequence_length < 1:
         browser_smart_stop_min_sequence_length = 3
+    if browser_smart_stop_reader_boundary_min_sequence_length < 1:
+        browser_smart_stop_reader_boundary_min_sequence_length = 20
+    if browser_smart_stop_reader_boundary_recent_growth_window < 0:
+        browser_smart_stop_reader_boundary_recent_growth_window = 20
+    if browser_smart_stop_reader_boundary_stable_rounds < 1:
+        browser_smart_stop_reader_boundary_stable_rounds = 10
     if browser_large_sequence_min_length < 1:
         browser_large_sequence_min_length = 20
     if browser_large_sequence_max_steps < 1:
@@ -393,6 +432,9 @@ def get_settings() -> Settings:
         browser_smart_stop_stable_rounds=browser_smart_stop_stable_rounds,
         browser_smart_stop_min_sequence_length=browser_smart_stop_min_sequence_length,
         browser_smart_stop_use_reader_boundary=browser_smart_stop_use_reader_boundary,
+        browser_smart_stop_reader_boundary_min_sequence_length=browser_smart_stop_reader_boundary_min_sequence_length,
+        browser_smart_stop_reader_boundary_recent_growth_window=browser_smart_stop_reader_boundary_recent_growth_window,
+        browser_smart_stop_reader_boundary_stable_rounds=browser_smart_stop_reader_boundary_stable_rounds,
         browser_large_sequence_mode_enabled=browser_large_sequence_mode_enabled,
         browser_large_sequence_min_length=browser_large_sequence_min_length,
         browser_large_sequence_max_steps=browser_large_sequence_max_steps,

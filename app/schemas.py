@@ -129,6 +129,12 @@ class ChapterCaptureDiagnostics(BaseModel):
     smartStopTriggered: bool
     smartStopReason: str
     readerBoundarySuspected: bool
+    readerBoundaryMinSequenceLength: int
+    readerBoundaryRecentGrowthWindow: int
+    readerBoundaryStableRoundsRequired: int
+    readerBoundaryBlockedBecauseSequenceTooSmall: bool
+    readerBoundaryBlockedBecauseRecentGrowth: bool
+    readerBoundaryBlockedBecauseNotStableEnough: bool
     lastSequenceGrowthStep: int
     largeSequenceModeEnabled: bool
     largeSequenceModeTriggered: bool

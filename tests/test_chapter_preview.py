@@ -271,6 +271,9 @@ def test_reader_readiness_config_defaults(monkeypatch) -> None:
     assert settings.browser_smart_stop_stable_rounds == 8
     assert settings.browser_smart_stop_min_sequence_length == 3
     assert settings.browser_smart_stop_use_reader_boundary is True
+    assert settings.browser_smart_stop_reader_boundary_min_sequence_length == 20
+    assert settings.browser_smart_stop_reader_boundary_recent_growth_window == 20
+    assert settings.browser_smart_stop_reader_boundary_stable_rounds == 10
     assert settings.browser_large_sequence_mode_enabled is True
     assert settings.browser_large_sequence_min_length == 20
     assert settings.browser_large_sequence_max_steps == 1000
@@ -290,6 +293,9 @@ def test_config_reads_reader_readiness_values_from_env(monkeypatch) -> None:
     monkeypatch.setenv("BROWSER_SMART_STOP_STABLE_ROUNDS", "3")
     monkeypatch.setenv("BROWSER_SMART_STOP_MIN_SEQUENCE_LENGTH", "5")
     monkeypatch.setenv("BROWSER_SMART_STOP_USE_READER_BOUNDARY", "false")
+    monkeypatch.setenv("BROWSER_SMART_STOP_READER_BOUNDARY_MIN_SEQUENCE_LENGTH", "21")
+    monkeypatch.setenv("BROWSER_SMART_STOP_READER_BOUNDARY_RECENT_GROWTH_WINDOW", "7")
+    monkeypatch.setenv("BROWSER_SMART_STOP_READER_BOUNDARY_STABLE_ROUNDS", "4")
     monkeypatch.setenv("BROWSER_LARGE_SEQUENCE_MODE_ENABLED", "false")
     monkeypatch.setenv("BROWSER_LARGE_SEQUENCE_MIN_LENGTH", "12")
     monkeypatch.setenv("BROWSER_LARGE_SEQUENCE_MAX_STEPS", "333")
@@ -309,6 +315,9 @@ def test_config_reads_reader_readiness_values_from_env(monkeypatch) -> None:
     assert settings.browser_smart_stop_stable_rounds == 3
     assert settings.browser_smart_stop_min_sequence_length == 5
     assert settings.browser_smart_stop_use_reader_boundary is False
+    assert settings.browser_smart_stop_reader_boundary_min_sequence_length == 21
+    assert settings.browser_smart_stop_reader_boundary_recent_growth_window == 7
+    assert settings.browser_smart_stop_reader_boundary_stable_rounds == 4
     assert settings.browser_large_sequence_mode_enabled is False
     assert settings.browser_large_sequence_min_length == 12
     assert settings.browser_large_sequence_max_steps == 333
@@ -2101,6 +2110,12 @@ def test_capture_stop_policy_smart_is_passed_to_worker(monkeypatch) -> None:
                     "smartStopTriggered": True,
                     "smartStopReason": "smart_sequence_complete",
                     "readerBoundarySuspected": False,
+                    "readerBoundaryMinSequenceLength": 20,
+                    "readerBoundaryRecentGrowthWindow": 20,
+                    "readerBoundaryStableRoundsRequired": 10,
+                    "readerBoundaryBlockedBecauseSequenceTooSmall": False,
+                    "readerBoundaryBlockedBecauseRecentGrowth": False,
+                    "readerBoundaryBlockedBecauseNotStableEnough": False,
                     "lastSequenceGrowthStep": 7,
                     "largeSequenceModeEnabled": True,
                     "largeSequenceModeTriggered": True,
@@ -2151,6 +2166,12 @@ def test_capture_stop_policy_smart_is_passed_to_worker(monkeypatch) -> None:
     assert diagnostics["smartStopEnabled"] is True
     assert diagnostics["smartStopTriggered"] is True
     assert diagnostics["smartStopReason"] == "smart_sequence_complete"
+    assert diagnostics["readerBoundaryMinSequenceLength"] == 20
+    assert diagnostics["readerBoundaryRecentGrowthWindow"] == 20
+    assert diagnostics["readerBoundaryStableRoundsRequired"] == 10
+    assert diagnostics["readerBoundaryBlockedBecauseSequenceTooSmall"] is False
+    assert diagnostics["readerBoundaryBlockedBecauseRecentGrowth"] is False
+    assert diagnostics["readerBoundaryBlockedBecauseNotStableEnough"] is False
     assert diagnostics["lastSequenceGrowthStep"] == 7
     assert diagnostics["largeSequenceModeEnabled"] is True
     assert diagnostics["largeSequenceModeTriggered"] is True
@@ -2406,102 +2427,129 @@ def test_smart_policy_does_not_stop_before_min_steps(monkeypatch) -> None:
 
 
 def test_smart_policy_can_stop_on_reader_boundary_after_stable_sequence(monkeypatch) -> None:
-    import app.services.browser_capture_worker as worker
+    from app.services.browser_capture_worker import _evaluate_smart_stop
 
-    class FakeKeyboard:
-        def press(self, key: str) -> None:
-            return None
+    diagnostics = {
+        "smartStopMinSteps": 3,
+        "smartStopMinSequenceLength": 3,
+        "smartStopStableRounds": 2,
+        "largeSequenceModeTriggered": False,
+        "largeSequenceStableRounds": 25,
+        "readerBoundarySuspected": True,
+        "readerBoundaryMinSequenceLength": 20,
+        "readerBoundaryRecentGrowthWindow": 1,
+        "readerBoundaryStableRoundsRequired": 2,
+        "readerBoundaryBlockedBecauseSequenceTooSmall": False,
+        "readerBoundaryBlockedBecauseRecentGrowth": False,
+        "readerBoundaryBlockedBecauseNotStableEnough": False,
+    }
 
-    class FakeMouse:
-        def wheel(self, dx: int, dy: int) -> None:
-            return None
-
-    class FakePage:
-        def __init__(self):
-            self.keyboard = FakeKeyboard()
-            self.mouse = FakeMouse()
-
-        def evaluate(self, script: str):
-            return None
-
-        def wait_for_timeout(self, milliseconds: int) -> None:
-            return None
-
-    sequence_rounds = [
-        ["https://example.com/pages/01.webp"],
-        [
-            "https://example.com/pages/01.webp",
-            "https://example.com/pages/02.webp",
-        ],
-        [
-            "https://example.com/pages/01.webp",
-            "https://example.com/pages/02.webp",
-            "https://example.com/pages/03.webp",
-        ],
-        [
-            "https://example.com/pages/01.webp",
-            "https://example.com/pages/02.webp",
-            "https://example.com/pages/03.webp",
-        ],
-        [
-            "https://example.com/pages/01.webp",
-            "https://example.com/pages/02.webp",
-            "https://example.com/pages/03.webp",
-        ],
-    ]
-    ticks = iter(range(100))
-    monkeypatch.setattr("app.services.browser_capture_worker.time.monotonic", lambda: next(ticks))
-    monkeypatch.setattr(
-        "app.services.browser_capture_worker._scan_dom_image_urls",
-        lambda page: sequence_rounds.pop(0) if sequence_rounds else [
-            "https://example.com/pages/01.webp",
-            "https://example.com/pages/02.webp",
-            "https://example.com/pages/03.webp",
-        ],
-    )
-    monkeypatch.setattr(
-        "app.services.browser_capture_worker._detect_reader_boundary",
-        lambda page: True,
+    result = _evaluate_smart_stop(
+        diagnostics=diagnostics,
+        step=5,
+        stable_rounds=2,
+        current_sequence_length=20,
+        last_network_growth_step=0,
+        last_sequence_growth_step=2,
     )
 
-    args = SimpleNamespace(
-        capture_mode="autonomous",
-        stop_policy="smart",
-        autonomous_enabled="true",
-        autonomous_max_steps=20,
-        autonomous_step_wait_ms=0,
-        autonomous_stable_rounds=5,
-        autonomous_enable_keyboard="true",
-        autonomous_enable_mouse_wheel="true",
-        carousel_exploration_enabled="true",
-        carousel_max_steps=20,
-        sequence_stable_rounds=6,
-        duration_seconds=120,
-        smart_stop_min_steps=3,
-        smart_stop_stable_rounds=2,
-        smart_stop_min_sequence_length=3,
-        smart_stop_use_reader_boundary="true",
-    )
-    discovered = []
-    seen = set()
+    assert result == "smart_reader_boundary"
+    assert diagnostics["readerBoundaryBlockedBecauseSequenceTooSmall"] is False
+    assert diagnostics["readerBoundaryBlockedBecauseRecentGrowth"] is False
+    assert diagnostics["readerBoundaryBlockedBecauseNotStableEnough"] is False
 
-    def add_image(url: str, source: str) -> None:
-        if url in seen:
-            return
-        seen.add(url)
-        discovered.append({"url": url, "source": source})
 
-    diagnostics = worker._run_autonomous_capture(
-        FakePage(),
-        args,
-        add_image,
-        discovered,
-        lambda: 0,
+def test_smart_reader_boundary_does_not_trigger_when_sequence_too_small(monkeypatch) -> None:
+    from app.services.browser_capture_worker import _evaluate_smart_stop
+
+    diagnostics = {
+        "smartStopMinSteps": 1,
+        "smartStopMinSequenceLength": 3,
+        "smartStopStableRounds": 2,
+        "largeSequenceModeTriggered": False,
+        "largeSequenceStableRounds": 25,
+        "readerBoundarySuspected": True,
+        "readerBoundaryMinSequenceLength": 20,
+        "readerBoundaryRecentGrowthWindow": 1,
+        "readerBoundaryStableRoundsRequired": 2,
+        "readerBoundaryBlockedBecauseSequenceTooSmall": False,
+        "readerBoundaryBlockedBecauseRecentGrowth": False,
+        "readerBoundaryBlockedBecauseNotStableEnough": False,
+    }
+
+    result = _evaluate_smart_stop(
+        diagnostics=diagnostics,
+        step=5,
+        stable_rounds=2,
+        current_sequence_length=5,
+        last_network_growth_step=0,
+        last_sequence_growth_step=1,
     )
 
-    assert diagnostics["smartStopTriggered"] is True
-    assert diagnostics["readerBoundarySuspected"] is True
-    assert diagnostics["smartStopReason"] == "smart_reader_boundary"
+    assert result is None
+    assert diagnostics["readerBoundaryBlockedBecauseSequenceTooSmall"] is True
+
+
+def test_smart_reader_boundary_does_not_trigger_when_sequence_grew_recently(monkeypatch) -> None:
+    from app.services.browser_capture_worker import _evaluate_smart_stop
+
+    diagnostics = {
+        "smartStopMinSteps": 1,
+        "smartStopMinSequenceLength": 3,
+        "smartStopStableRounds": 2,
+        "largeSequenceModeTriggered": False,
+        "largeSequenceStableRounds": 25,
+        "readerBoundarySuspected": True,
+        "readerBoundaryMinSequenceLength": 20,
+        "readerBoundaryRecentGrowthWindow": 20,
+        "readerBoundaryStableRoundsRequired": 2,
+        "readerBoundaryBlockedBecauseSequenceTooSmall": False,
+        "readerBoundaryBlockedBecauseRecentGrowth": False,
+        "readerBoundaryBlockedBecauseNotStableEnough": False,
+    }
+
+    result = _evaluate_smart_stop(
+        diagnostics=diagnostics,
+        step=10,
+        stable_rounds=2,
+        current_sequence_length=20,
+        last_network_growth_step=0,
+        last_sequence_growth_step=5,
+    )
+
+    assert result is None
+    assert diagnostics["readerBoundaryBlockedBecauseRecentGrowth"] is True
+
+
+def test_smart_reader_boundary_does_not_trigger_when_not_stable_enough(monkeypatch) -> None:
+    from app.services.browser_capture_worker import _evaluate_smart_stop
+
+    diagnostics = {
+        "smartStopMinSteps": 1,
+        "smartStopMinSequenceLength": 3,
+        "smartStopStableRounds": 2,
+        "largeSequenceModeTriggered": False,
+        "largeSequenceStableRounds": 25,
+        "readerBoundarySuspected": True,
+        "readerBoundaryMinSequenceLength": 20,
+        "readerBoundaryRecentGrowthWindow": 0,
+        "readerBoundaryStableRoundsRequired": 4,
+        "readerBoundaryBlockedBecauseSequenceTooSmall": False,
+        "readerBoundaryBlockedBecauseRecentGrowth": False,
+        "readerBoundaryBlockedBecauseNotStableEnough": False,
+    }
+
+    result = _evaluate_smart_stop(
+        diagnostics=diagnostics,
+        step=10,
+        stable_rounds=2,
+        current_sequence_length=20,
+        last_network_growth_step=0,
+        last_sequence_growth_step=1,
+    )
+
+    assert result is None
+    assert diagnostics["readerBoundaryBlockedBecauseNotStableEnough"] is True
 
 
 def test_large_sequence_mode_triggers_after_min_sequence_length(monkeypatch) -> None:
@@ -3217,6 +3265,12 @@ def test_autonomous_capture_diagnostics_include_reader_fields(monkeypatch) -> No
                     "smartStopTriggered": True,
                     "smartStopReason": "smart_sequence_complete",
                     "readerBoundarySuspected": False,
+                    "readerBoundaryMinSequenceLength": 20,
+                    "readerBoundaryRecentGrowthWindow": 20,
+                    "readerBoundaryStableRoundsRequired": 10,
+                    "readerBoundaryBlockedBecauseSequenceTooSmall": False,
+                    "readerBoundaryBlockedBecauseRecentGrowth": False,
+                    "readerBoundaryBlockedBecauseNotStableEnough": False,
                     "lastSequenceGrowthStep": 6,
                     "largeSequenceModeEnabled": True,
                     "largeSequenceModeTriggered": True,
@@ -3609,6 +3663,12 @@ def test_capture_worker_argparse_accepts_large_sequence_args() -> None:
             "10000",
             "--large-sequence-mode-enabled",
             "true",
+            "--smart-stop-reader-boundary-min-sequence-length",
+            "20",
+            "--smart-stop-reader-boundary-recent-growth-window",
+            "20",
+            "--smart-stop-reader-boundary-stable-rounds",
+            "10",
             "--large-sequence-min-length",
             "20",
             "--large-sequence-max-steps",
@@ -3623,6 +3683,9 @@ def test_capture_worker_argparse_accepts_large_sequence_args() -> None:
     )
 
     assert args.large_sequence_mode_enabled == "true"
+    assert args.smart_stop_reader_boundary_min_sequence_length == 20
+    assert args.smart_stop_reader_boundary_recent_growth_window == 20
+    assert args.smart_stop_reader_boundary_stable_rounds == 10
     assert args.large_sequence_min_length == 20
     assert args.large_sequence_max_steps == 2000
     assert args.large_sequence_step_wait_ms == 200
@@ -3665,6 +3728,9 @@ def test_capture_parent_worker_cli_contract_includes_large_sequence_args(monkeyp
         smart_stop_stable_rounds=8,
         smart_stop_min_sequence_length=3,
         smart_stop_use_reader_boundary=True,
+        smart_stop_reader_boundary_min_sequence_length=20,
+        smart_stop_reader_boundary_recent_growth_window=20,
+        smart_stop_reader_boundary_stable_rounds=10,
         large_sequence_mode_enabled=True,
         large_sequence_min_length=20,
         large_sequence_max_steps=2000,
@@ -3677,6 +3743,9 @@ def test_capture_parent_worker_cli_contract_includes_large_sequence_args(monkeyp
 
     assert parsed.capture_mode == "autonomous"
     assert parsed.stop_policy == "smart"
+    assert parsed.smart_stop_reader_boundary_min_sequence_length == 20
+    assert parsed.smart_stop_reader_boundary_recent_growth_window == 20
+    assert parsed.smart_stop_reader_boundary_stable_rounds == 10
     assert parsed.large_sequence_mode_enabled == "true"
     assert parsed.large_sequence_min_length == 20
     assert parsed.large_sequence_max_steps == 2000
@@ -3789,6 +3858,12 @@ def test_batch_endpoint_exists_and_uses_default_analysis_mode(
                 smartStopTriggered=False,
                 smartStopReason="none",
                 readerBoundarySuspected=False,
+                readerBoundaryMinSequenceLength=20,
+                readerBoundaryRecentGrowthWindow=20,
+                readerBoundaryStableRoundsRequired=10,
+                readerBoundaryBlockedBecauseSequenceTooSmall=False,
+                readerBoundaryBlockedBecauseRecentGrowth=False,
+                readerBoundaryBlockedBecauseNotStableEnough=False,
                 lastSequenceGrowthStep=0,
                 largeSequenceModeEnabled=True,
                 largeSequenceModeTriggered=False,
@@ -4066,6 +4141,12 @@ def test_autonomous_capture_batch_calls_capture_autonomous(monkeypatch, tmp_path
                 smartStopTriggered=False,
                 smartStopReason="none",
                 readerBoundarySuspected=False,
+                readerBoundaryMinSequenceLength=20,
+                readerBoundaryRecentGrowthWindow=20,
+                readerBoundaryStableRoundsRequired=10,
+                readerBoundaryBlockedBecauseSequenceTooSmall=False,
+                readerBoundaryBlockedBecauseRecentGrowth=False,
+                readerBoundaryBlockedBecauseNotStableEnough=False,
                 lastSequenceGrowthStep=0,
                 largeSequenceModeEnabled=True,
                 largeSequenceModeTriggered=False,
@@ -4167,6 +4248,12 @@ def test_batch_accepts_smart_stop_policy(monkeypatch, tmp_path) -> None:
                 smartStopTriggered=True,
                 smartStopReason="smart_sequence_complete",
                 readerBoundarySuspected=False,
+                readerBoundaryMinSequenceLength=20,
+                readerBoundaryRecentGrowthWindow=20,
+                readerBoundaryStableRoundsRequired=10,
+                readerBoundaryBlockedBecauseSequenceTooSmall=False,
+                readerBoundaryBlockedBecauseRecentGrowth=False,
+                readerBoundaryBlockedBecauseNotStableEnough=False,
                 lastSequenceGrowthStep=4,
                 largeSequenceModeEnabled=True,
                 largeSequenceModeTriggered=False,
