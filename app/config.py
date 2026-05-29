@@ -86,6 +86,12 @@ class Settings:
     browser_adaptive_arrow_stable_rounds: int
     browser_adaptive_arrow_presses_per_step: int
     browser_adaptive_arrow_step_wait_ms: int
+    browser_reader_end_detection_enabled: bool
+    browser_reader_end_min_sequence_length: int
+    browser_reader_end_stable_rounds: int
+    browser_reader_end_max_rounds_after_last_growth: int
+    browser_reader_end_use_comment_hints: bool
+    browser_reader_end_use_scroll_boundary: bool
     browser_right_arrow_nav_enabled: bool
     browser_right_arrow_max_steps: int
     browser_right_arrow_wait_ms: int
@@ -315,6 +321,30 @@ def get_settings() -> Settings:
         "BROWSER_ADAPTIVE_ARROW_STEP_WAIT_MS",
         "200",
     ).strip()
+    browser_reader_end_detection_enabled = _parse_bool(
+        os.getenv("BROWSER_READER_END_DETECTION_ENABLED", "true"),
+        True,
+    )
+    reader_end_min_sequence_length_raw = os.getenv(
+        "BROWSER_READER_END_MIN_SEQUENCE_LENGTH",
+        "3",
+    ).strip()
+    reader_end_stable_rounds_raw = os.getenv(
+        "BROWSER_READER_END_STABLE_ROUNDS",
+        "6",
+    ).strip()
+    reader_end_max_rounds_after_last_growth_raw = os.getenv(
+        "BROWSER_READER_END_MAX_ROUNDS_AFTER_LAST_GROWTH",
+        "10",
+    ).strip()
+    browser_reader_end_use_comment_hints = _parse_bool(
+        os.getenv("BROWSER_READER_END_USE_COMMENT_HINTS", "true"),
+        True,
+    )
+    browser_reader_end_use_scroll_boundary = _parse_bool(
+        os.getenv("BROWSER_READER_END_USE_SCROLL_BOUNDARY", "true"),
+        True,
+    )
     browser_right_arrow_nav_enabled = _parse_bool(
         os.getenv(
             "BROWSER_RIGHT_ARROW_NAV_ENABLED",
@@ -542,6 +572,20 @@ def get_settings() -> Settings:
     except ValueError:
         browser_adaptive_arrow_step_wait_ms = 200
     try:
+        browser_reader_end_min_sequence_length = int(reader_end_min_sequence_length_raw)
+    except ValueError:
+        browser_reader_end_min_sequence_length = 3
+    try:
+        browser_reader_end_stable_rounds = int(reader_end_stable_rounds_raw)
+    except ValueError:
+        browser_reader_end_stable_rounds = 6
+    try:
+        browser_reader_end_max_rounds_after_last_growth = int(
+            reader_end_max_rounds_after_last_growth_raw
+        )
+    except ValueError:
+        browser_reader_end_max_rounds_after_last_growth = 10
+    try:
         browser_right_arrow_max_steps = int(right_arrow_max_steps_raw)
     except ValueError:
         browser_right_arrow_max_steps = 1000
@@ -638,6 +682,12 @@ def get_settings() -> Settings:
         browser_adaptive_arrow_presses_per_step = 1
     if browser_adaptive_arrow_step_wait_ms < 0:
         browser_adaptive_arrow_step_wait_ms = 200
+    if browser_reader_end_min_sequence_length < 1:
+        browser_reader_end_min_sequence_length = 3
+    if browser_reader_end_stable_rounds < 1:
+        browser_reader_end_stable_rounds = 6
+    if browser_reader_end_max_rounds_after_last_growth < 1:
+        browser_reader_end_max_rounds_after_last_growth = 10
     if browser_right_arrow_max_steps < 1:
         browser_right_arrow_max_steps = 1000
     if browser_right_arrow_wait_ms < 0:
@@ -715,6 +765,12 @@ def get_settings() -> Settings:
         browser_adaptive_arrow_stable_rounds=browser_adaptive_arrow_stable_rounds,
         browser_adaptive_arrow_presses_per_step=browser_adaptive_arrow_presses_per_step,
         browser_adaptive_arrow_step_wait_ms=browser_adaptive_arrow_step_wait_ms,
+        browser_reader_end_detection_enabled=browser_reader_end_detection_enabled,
+        browser_reader_end_min_sequence_length=browser_reader_end_min_sequence_length,
+        browser_reader_end_stable_rounds=browser_reader_end_stable_rounds,
+        browser_reader_end_max_rounds_after_last_growth=browser_reader_end_max_rounds_after_last_growth,
+        browser_reader_end_use_comment_hints=browser_reader_end_use_comment_hints,
+        browser_reader_end_use_scroll_boundary=browser_reader_end_use_scroll_boundary,
         browser_right_arrow_nav_enabled=browser_right_arrow_nav_enabled,
         browser_right_arrow_max_steps=browser_right_arrow_max_steps,
         browser_right_arrow_wait_ms=browser_right_arrow_wait_ms,

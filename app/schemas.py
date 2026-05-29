@@ -170,6 +170,16 @@ class ChapterCaptureDiagnostics(BaseModel):
     adaptiveArrowUrlChanged: bool = False
     adaptiveArrowInitialUrl: str = ""
     adaptiveArrowFinalUrl: str = ""
+    readerEndDetectionEnabled: bool = False
+    readerEndDetected: bool = False
+    readerEndStopTriggered: bool = False
+    readerEndStableRoundsRequired: int = 0
+    readerEndStableRoundsObserved: int = 0
+    readerEndMaxRoundsAfterLastGrowth: int = 0
+    readerEndRoundsAfterLastGrowth: int = 0
+    readerEndCommentHintDetected: bool = False
+    readerEndScrollBoundaryDetected: bool = False
+    readerEndReason: str = "none"
     rightArrowNavigationEnabled: bool
     rightArrowStepsExecuted: int
     rightArrowPressesSent: int

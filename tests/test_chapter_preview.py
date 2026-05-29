@@ -298,6 +298,12 @@ def test_reader_readiness_config_defaults(monkeypatch) -> None:
     assert settings.browser_adaptive_arrow_stable_rounds == 20
     assert settings.browser_adaptive_arrow_presses_per_step == 1
     assert settings.browser_adaptive_arrow_step_wait_ms == 200
+    assert settings.browser_reader_end_detection_enabled is True
+    assert settings.browser_reader_end_min_sequence_length == 3
+    assert settings.browser_reader_end_stable_rounds == 6
+    assert settings.browser_reader_end_max_rounds_after_last_growth == 10
+    assert settings.browser_reader_end_use_comment_hints is True
+    assert settings.browser_reader_end_use_scroll_boundary is True
     assert settings.browser_right_arrow_nav_enabled is True
     assert settings.browser_right_arrow_max_steps == 1000
     assert settings.browser_right_arrow_wait_ms == 250
@@ -344,6 +350,12 @@ def test_config_reads_reader_readiness_values_from_env(monkeypatch) -> None:
     monkeypatch.setenv("BROWSER_ADAPTIVE_ARROW_STABLE_ROUNDS", "9")
     monkeypatch.setenv("BROWSER_ADAPTIVE_ARROW_PRESSES_PER_STEP", "2")
     monkeypatch.setenv("BROWSER_ADAPTIVE_ARROW_STEP_WAIT_MS", "123")
+    monkeypatch.setenv("BROWSER_READER_END_DETECTION_ENABLED", "false")
+    monkeypatch.setenv("BROWSER_READER_END_MIN_SEQUENCE_LENGTH", "8")
+    monkeypatch.setenv("BROWSER_READER_END_STABLE_ROUNDS", "4")
+    monkeypatch.setenv("BROWSER_READER_END_MAX_ROUNDS_AFTER_LAST_GROWTH", "6")
+    monkeypatch.setenv("BROWSER_READER_END_USE_COMMENT_HINTS", "false")
+    monkeypatch.setenv("BROWSER_READER_END_USE_SCROLL_BOUNDARY", "false")
     monkeypatch.setenv("BROWSER_RIGHT_ARROW_NAV_ENABLED", "false")
     monkeypatch.setenv("BROWSER_RIGHT_ARROW_MAX_STEPS", "44")
     monkeypatch.setenv("BROWSER_RIGHT_ARROW_WAIT_MS", "123")
@@ -390,6 +402,12 @@ def test_config_reads_reader_readiness_values_from_env(monkeypatch) -> None:
     assert settings.browser_adaptive_arrow_stable_rounds == 9
     assert settings.browser_adaptive_arrow_presses_per_step == 2
     assert settings.browser_adaptive_arrow_step_wait_ms == 123
+    assert settings.browser_reader_end_detection_enabled is False
+    assert settings.browser_reader_end_min_sequence_length == 8
+    assert settings.browser_reader_end_stable_rounds == 4
+    assert settings.browser_reader_end_max_rounds_after_last_growth == 6
+    assert settings.browser_reader_end_use_comment_hints is False
+    assert settings.browser_reader_end_use_scroll_boundary is False
     assert settings.browser_right_arrow_nav_enabled is False
     assert settings.browser_right_arrow_max_steps == 44
     assert settings.browser_right_arrow_wait_ms == 123
@@ -3838,10 +3856,209 @@ def test_adaptive_arrow_stops_on_url_change_during_traversal_and_preserves_image
     assert diagnostics["adaptiveArrowSelectedKey"] == "ArrowRight"
     assert diagnostics["adaptiveArrowUrlChanged"] is True
     assert diagnostics["adaptiveArrowStopReason"] == "url_changed"
+    assert diagnostics["readerEndStopTriggered"] is False
     assert [item["url"] for item in discovered] == [
         "https://example.com/pages/01.webp",
         "https://example.com/pages/02.webp",
     ]
+
+
+def test_reader_end_stop_does_not_trigger_before_any_productive_action(monkeypatch) -> None:
+    import app.services.browser_capture_worker as worker
+
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_reader_end_comment_hint",
+        lambda page: True,
+    )
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_scroll_boundary",
+        lambda page: True,
+    )
+
+    diagnostics = {
+        "readerEndDetectionEnabled": True,
+        "adaptiveArrowGrowthEvents": 0,
+        "readerEndMinSequenceLength": 3,
+        "readerEndStableRoundsRequired": 6,
+        "readerEndMaxRoundsAfterLastGrowth": 10,
+        "readerEndUseCommentHints": True,
+        "readerEndUseScrollBoundary": True,
+        "readerEndCommentHintDetected": False,
+        "readerEndScrollBoundaryDetected": False,
+        "readerEndRoundsAfterLastGrowth": 0,
+    }
+
+    reason = worker._evaluate_reader_end_stop(
+        page=object(),
+        diagnostics=diagnostics,
+        step=20,
+        stable_rounds=10,
+        current_sequence_length=10,
+        last_sequence_growth_step=0,
+    )
+
+    assert reason is None
+
+
+def test_reader_end_stop_does_not_trigger_while_sequence_is_growing(monkeypatch) -> None:
+    import app.services.browser_capture_worker as worker
+
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_reader_end_comment_hint",
+        lambda page: True,
+    )
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_scroll_boundary",
+        lambda page: True,
+    )
+
+    diagnostics = {
+        "readerEndDetectionEnabled": True,
+        "adaptiveArrowGrowthEvents": 2,
+        "readerEndMinSequenceLength": 3,
+        "readerEndStableRoundsRequired": 6,
+        "readerEndMaxRoundsAfterLastGrowth": 10,
+        "readerEndUseCommentHints": True,
+        "readerEndUseScrollBoundary": True,
+        "readerEndCommentHintDetected": False,
+        "readerEndScrollBoundaryDetected": False,
+        "readerEndRoundsAfterLastGrowth": 0,
+    }
+
+    reason = worker._evaluate_reader_end_stop(
+        page=object(),
+        diagnostics=diagnostics,
+        step=12,
+        stable_rounds=2,
+        current_sequence_length=10,
+        last_sequence_growth_step=11,
+    )
+
+    assert reason is None
+
+
+def test_reader_end_stop_triggers_after_stable_rounds_with_comment_hint(monkeypatch) -> None:
+    import app.services.browser_capture_worker as worker
+
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_reader_end_comment_hint",
+        lambda page: True,
+    )
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_scroll_boundary",
+        lambda page: False,
+    )
+
+    diagnostics = {
+        "readerEndDetectionEnabled": True,
+        "adaptiveArrowGrowthEvents": 3,
+        "readerEndMinSequenceLength": 3,
+        "readerEndStableRoundsRequired": 6,
+        "readerEndMaxRoundsAfterLastGrowth": 10,
+        "readerEndUseCommentHints": True,
+        "readerEndUseScrollBoundary": True,
+        "readerEndCommentHintDetected": False,
+        "readerEndScrollBoundaryDetected": False,
+        "readerEndRoundsAfterLastGrowth": 0,
+    }
+
+    reason = worker._evaluate_reader_end_stop(
+        page=object(),
+        diagnostics=diagnostics,
+        step=20,
+        stable_rounds=6,
+        current_sequence_length=8,
+        last_sequence_growth_step=10,
+    )
+
+    assert reason == "comment_hint"
+    assert diagnostics["readerEndCommentHintDetected"] is True
+    assert diagnostics["readerEndScrollBoundaryDetected"] is False
+
+
+def test_reader_end_stop_triggers_after_stable_rounds_with_scroll_boundary(monkeypatch) -> None:
+    import app.services.browser_capture_worker as worker
+
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_reader_end_comment_hint",
+        lambda page: False,
+    )
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_scroll_boundary",
+        lambda page: True,
+    )
+
+    diagnostics = {
+        "readerEndDetectionEnabled": True,
+        "adaptiveArrowGrowthEvents": 3,
+        "readerEndMinSequenceLength": 3,
+        "readerEndStableRoundsRequired": 6,
+        "readerEndMaxRoundsAfterLastGrowth": 10,
+        "readerEndUseCommentHints": True,
+        "readerEndUseScrollBoundary": True,
+        "readerEndCommentHintDetected": False,
+        "readerEndScrollBoundaryDetected": False,
+        "readerEndRoundsAfterLastGrowth": 0,
+    }
+
+    reason = worker._evaluate_reader_end_stop(
+        page=object(),
+        diagnostics=diagnostics,
+        step=21,
+        stable_rounds=6,
+        current_sequence_length=8,
+        last_sequence_growth_step=10,
+    )
+
+    assert reason == "scroll_boundary"
+    assert diagnostics["readerEndCommentHintDetected"] is False
+    assert diagnostics["readerEndScrollBoundaryDetected"] is True
+
+
+def test_reader_end_stop_respects_min_sequence_length_and_rounds_after_growth(monkeypatch) -> None:
+    import app.services.browser_capture_worker as worker
+
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_reader_end_comment_hint",
+        lambda page: True,
+    )
+    monkeypatch.setattr(
+        "app.services.browser_capture_worker._detect_scroll_boundary",
+        lambda page: True,
+    )
+
+    diagnostics = {
+        "readerEndDetectionEnabled": True,
+        "adaptiveArrowGrowthEvents": 3,
+        "readerEndMinSequenceLength": 6,
+        "readerEndStableRoundsRequired": 6,
+        "readerEndMaxRoundsAfterLastGrowth": 10,
+        "readerEndUseCommentHints": True,
+        "readerEndUseScrollBoundary": True,
+        "readerEndCommentHintDetected": False,
+        "readerEndScrollBoundaryDetected": False,
+        "readerEndRoundsAfterLastGrowth": 0,
+    }
+
+    too_small = worker._evaluate_reader_end_stop(
+        page=object(),
+        diagnostics=dict(diagnostics),
+        step=20,
+        stable_rounds=6,
+        current_sequence_length=5,
+        last_sequence_growth_step=10,
+    )
+    too_early = worker._evaluate_reader_end_stop(
+        page=object(),
+        diagnostics=dict(diagnostics),
+        step=17,
+        stable_rounds=6,
+        current_sequence_length=8,
+        last_sequence_growth_step=10,
+    )
+
+    assert too_small is None
+    assert too_early is None
 
 
 def test_large_sequence_mode_triggers_after_min_sequence_length(monkeypatch) -> None:
@@ -5027,6 +5244,18 @@ def test_capture_worker_argparse_accepts_large_sequence_args() -> None:
             "1",
             "--adaptive-arrow-step-wait-ms",
             "200",
+            "--reader-end-detection-enabled",
+            "true",
+            "--reader-end-min-sequence-length",
+            "3",
+            "--reader-end-stable-rounds",
+            "6",
+            "--reader-end-max-rounds-after-last-growth",
+            "10",
+            "--reader-end-use-comment-hints",
+            "true",
+            "--reader-end-use-scroll-boundary",
+            "true",
             "--right-arrow-nav-enabled",
             "true",
             "--right-arrow-max-steps",
@@ -5069,6 +5298,12 @@ def test_capture_worker_argparse_accepts_large_sequence_args() -> None:
     assert args.adaptive_arrow_stable_rounds == 20
     assert args.adaptive_arrow_presses_per_step == 1
     assert args.adaptive_arrow_step_wait_ms == 200
+    assert args.reader_end_detection_enabled == "true"
+    assert args.reader_end_min_sequence_length == 3
+    assert args.reader_end_stable_rounds == 6
+    assert args.reader_end_max_rounds_after_last_growth == 10
+    assert args.reader_end_use_comment_hints == "true"
+    assert args.reader_end_use_scroll_boundary == "true"
     assert args.right_arrow_nav_enabled == "true"
     assert args.right_arrow_max_steps == 1000
     assert args.right_arrow_wait_ms == 250
@@ -5139,6 +5374,12 @@ def test_capture_parent_worker_cli_contract_includes_large_sequence_args(monkeyp
         adaptive_arrow_stable_rounds=20,
         adaptive_arrow_presses_per_step=1,
         adaptive_arrow_step_wait_ms=200,
+        reader_end_detection_enabled=True,
+        reader_end_min_sequence_length=3,
+        reader_end_stable_rounds=6,
+        reader_end_max_rounds_after_last_growth=10,
+        reader_end_use_comment_hints=True,
+        reader_end_use_scroll_boundary=True,
         right_arrow_nav_enabled=True,
         right_arrow_max_steps=1000,
         right_arrow_wait_ms=250,
@@ -5178,6 +5419,12 @@ def test_capture_parent_worker_cli_contract_includes_large_sequence_args(monkeyp
     assert parsed.adaptive_arrow_stable_rounds == 20
     assert parsed.adaptive_arrow_presses_per_step == 1
     assert parsed.adaptive_arrow_step_wait_ms == 200
+    assert parsed.reader_end_detection_enabled == "true"
+    assert parsed.reader_end_min_sequence_length == 3
+    assert parsed.reader_end_stable_rounds == 6
+    assert parsed.reader_end_max_rounds_after_last_growth == 10
+    assert parsed.reader_end_use_comment_hints == "true"
+    assert parsed.reader_end_use_scroll_boundary == "true"
     assert parsed.right_arrow_nav_enabled == "true"
     assert parsed.right_arrow_max_steps == 1000
     assert parsed.right_arrow_wait_ms == 250

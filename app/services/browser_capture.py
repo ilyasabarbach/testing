@@ -95,6 +95,12 @@ async def capture_chapter_images(
         adaptive_arrow_stable_rounds=settings.browser_adaptive_arrow_stable_rounds,
         adaptive_arrow_presses_per_step=settings.browser_adaptive_arrow_presses_per_step,
         adaptive_arrow_step_wait_ms=settings.browser_adaptive_arrow_step_wait_ms,
+        reader_end_detection_enabled=settings.browser_reader_end_detection_enabled,
+        reader_end_min_sequence_length=settings.browser_reader_end_min_sequence_length,
+        reader_end_stable_rounds=settings.browser_reader_end_stable_rounds,
+        reader_end_max_rounds_after_last_growth=settings.browser_reader_end_max_rounds_after_last_growth,
+        reader_end_use_comment_hints=settings.browser_reader_end_use_comment_hints,
+        reader_end_use_scroll_boundary=settings.browser_reader_end_use_scroll_boundary,
         right_arrow_nav_enabled=settings.browser_right_arrow_nav_enabled,
         right_arrow_max_steps=settings.browser_right_arrow_max_steps,
         right_arrow_wait_ms=settings.browser_right_arrow_wait_ms,
@@ -307,6 +313,32 @@ async def capture_chapter_images(
             ),
             adaptiveArrowInitialUrl=str(payload.get("adaptiveArrowInitialUrl", "")),
             adaptiveArrowFinalUrl=str(payload.get("adaptiveArrowFinalUrl", "")),
+            readerEndDetectionEnabled=bool(
+                payload.get("readerEndDetectionEnabled", False)
+            ),
+            readerEndDetected=bool(payload.get("readerEndDetected", False)),
+            readerEndStopTriggered=bool(
+                payload.get("readerEndStopTriggered", False)
+            ),
+            readerEndStableRoundsRequired=int(
+                payload.get("readerEndStableRoundsRequired", 0)
+            ),
+            readerEndStableRoundsObserved=int(
+                payload.get("readerEndStableRoundsObserved", 0)
+            ),
+            readerEndMaxRoundsAfterLastGrowth=int(
+                payload.get("readerEndMaxRoundsAfterLastGrowth", 0)
+            ),
+            readerEndRoundsAfterLastGrowth=int(
+                payload.get("readerEndRoundsAfterLastGrowth", 0)
+            ),
+            readerEndCommentHintDetected=bool(
+                payload.get("readerEndCommentHintDetected", False)
+            ),
+            readerEndScrollBoundaryDetected=bool(
+                payload.get("readerEndScrollBoundaryDetected", False)
+            ),
+            readerEndReason=str(payload.get("readerEndReason", "none")),
             rightArrowNavigationEnabled=bool(
                 payload.get("rightArrowNavigationEnabled", False)
             ),
@@ -529,6 +561,12 @@ def build_capture_worker_command(
     adaptive_arrow_stable_rounds: int,
     adaptive_arrow_presses_per_step: int,
     adaptive_arrow_step_wait_ms: int,
+    reader_end_detection_enabled: bool,
+    reader_end_min_sequence_length: int,
+    reader_end_stable_rounds: int,
+    reader_end_max_rounds_after_last_growth: int,
+    reader_end_use_comment_hints: bool,
+    reader_end_use_scroll_boundary: bool,
     right_arrow_nav_enabled: bool,
     right_arrow_max_steps: int,
     right_arrow_wait_ms: int,
@@ -645,6 +683,18 @@ def build_capture_worker_command(
         str(adaptive_arrow_presses_per_step),
         "--adaptive-arrow-step-wait-ms",
         str(adaptive_arrow_step_wait_ms),
+        "--reader-end-detection-enabled",
+        "true" if reader_end_detection_enabled else "false",
+        "--reader-end-min-sequence-length",
+        str(reader_end_min_sequence_length),
+        "--reader-end-stable-rounds",
+        str(reader_end_stable_rounds),
+        "--reader-end-max-rounds-after-last-growth",
+        str(reader_end_max_rounds_after_last_growth),
+        "--reader-end-use-comment-hints",
+        "true" if reader_end_use_comment_hints else "false",
+        "--reader-end-use-scroll-boundary",
+        "true" if reader_end_use_scroll_boundary else "false",
         "--right-arrow-nav-enabled",
         "true" if right_arrow_nav_enabled else "false",
         "--right-arrow-max-steps",

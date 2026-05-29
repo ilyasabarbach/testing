@@ -94,6 +94,12 @@ BROWSER_ADAPTIVE_ARROW_MAX_STEPS=1000
 BROWSER_ADAPTIVE_ARROW_STABLE_ROUNDS=20
 BROWSER_ADAPTIVE_ARROW_PRESSES_PER_STEP=1
 BROWSER_ADAPTIVE_ARROW_STEP_WAIT_MS=200
+BROWSER_READER_END_DETECTION_ENABLED=true
+BROWSER_READER_END_MIN_SEQUENCE_LENGTH=3
+BROWSER_READER_END_STABLE_ROUNDS=6
+BROWSER_READER_END_MAX_ROUNDS_AFTER_LAST_GROWTH=10
+BROWSER_READER_END_USE_COMMENT_HINTS=true
+BROWSER_READER_END_USE_SCROLL_BOUNDARY=true
 BROWSER_RIGHT_ARROW_NAV_ENABLED=true
 BROWSER_RIGHT_ARROW_MAX_STEPS=1000
 BROWSER_RIGHT_ARROW_WAIT_MS=250
@@ -174,6 +180,12 @@ Project includes [.env.example](C:/Users/ilyas.abarbach/Documents/testing/.env.e
 - `BROWSER_ADAPTIVE_ARROW_STABLE_ROUNDS`: stable rounds required before adaptive traversal stops
 - `BROWSER_ADAPTIVE_ARROW_PRESSES_PER_STEP`: repeated presses per adaptive traversal step
 - `BROWSER_ADAPTIVE_ARROW_STEP_WAIT_MS`: wait after each adaptive traversal step
+- `BROWSER_READER_END_DETECTION_ENABLED`: enable fast generic reader-end stop during adaptive arrow traversal
+- `BROWSER_READER_END_MIN_SEQUENCE_LENGTH`: minimum dominant sequence length before reader-end stop is allowed
+- `BROWSER_READER_END_STABLE_ROUNDS`: stable rounds required before reader-end stop may trigger
+- `BROWSER_READER_END_MAX_ROUNDS_AFTER_LAST_GROWTH`: additional rounds without growth required after the last productive step
+- `BROWSER_READER_END_USE_COMMENT_HINTS`: allow generic visible comments/discussion/next-chapter hints
+- `BROWSER_READER_END_USE_SCROLL_BOUNDARY`: allow generic near-bottom / no-movement scroll boundary hints
 - `BROWSER_RIGHT_ARROW_NAV_ENABLED`: enable deterministic right-arrow-only traversal support
 - `BROWSER_RIGHT_ARROW_MAX_STEPS`: hard cap for right-arrow-only traversal steps
 - `BROWSER_RIGHT_ARROW_WAIT_MS`: wait after each right-arrow traversal round
@@ -327,6 +339,12 @@ URL safety:
 - if a candidate changes the main page URL, that candidate is marked unsafe and excluded
 - traversal also stops immediately if the selected arrow later changes the URL
 
+Fast reader-end stop:
+- after adaptive traversal has produced real image growth, the worker can stop early when the dominant sequence is stable
+- generic comment/discussion/reviews/next-chapter hints can help confirm the reader reached the end
+- generic scroll-boundary hints can also confirm that repeated selected-arrow presses no longer move the reader meaningfully
+- this reduces unnecessary waiting in comments areas after the real chapter images are already collected
+
 Use `BROWSER_READER_NAVIGATION_STRATEGY=right_arrow_only` for readers where repeated `ArrowRight` advances through one image/page at a time.
 
 Why this exists:
@@ -350,6 +368,7 @@ Limitations:
 - this remains generic, not site-specific
 - some readers may still need longer `durationSeconds`
 - adaptive probing currently tests only `ArrowRight` and `ArrowDown`
+- reader-end detection is heuristic and may be more conservative on unknown layouts
 - the strategy intentionally avoids other navigation keys in this mode, so it may be slower than a site-specific automation approach
 
 For Windows/Uvicorn stability, browser preview is isolated in a separate Python worker process instead of running Playwright directly inside the main API server process.

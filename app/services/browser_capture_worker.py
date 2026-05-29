@@ -311,6 +311,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
     )
     parser.add_argument("--adaptive-arrow-step-wait-ms", default=200, type=int)
+    parser.add_argument("--reader-end-detection-enabled", default="true")
+    parser.add_argument("--reader-end-min-sequence-length", default=3, type=int)
+    parser.add_argument("--reader-end-stable-rounds", default=6, type=int)
+    parser.add_argument(
+        "--reader-end-max-rounds-after-last-growth",
+        default=10,
+        type=int,
+    )
+    parser.add_argument("--reader-end-use-comment-hints", default="true")
+    parser.add_argument("--reader-end-use-scroll-boundary", default="true")
     parser.add_argument("--right-arrow-nav-enabled", default="true")
     parser.add_argument("--right-arrow-max-steps", default=1000, type=int)
     parser.add_argument("--right-arrow-wait-ms", default=250, type=int)
@@ -1172,11 +1182,36 @@ def _run_adaptive_arrow_traversal(
         diagnostics["autonomousActionsUsed"].append(
             f"adaptive_arrow_{selected_key.lower()}"
         )
+        diagnostics["readerEndStableRoundsObserved"] = stable_rounds
+        diagnostics["readerEndRoundsAfterLastGrowth"] = (
+            steps_executed - last_sequence_growth_step
+            if last_sequence_growth_step
+            else steps_executed
+        )
 
         if _should_enable_large_sequence_mode(diagnostics, current_sequence_length):
             diagnostics["largeSequenceModeTriggered"] = True
         if diagnostics["largeSequenceModeTriggered"]:
             diagnostics["largeSequenceStepsExecuted"] += 1
+
+        reader_end_reason = _evaluate_reader_end_stop(
+            page=page,
+            diagnostics=diagnostics,
+            step=steps_executed,
+            stable_rounds=stable_rounds,
+            current_sequence_length=current_sequence_length,
+            last_sequence_growth_step=last_sequence_growth_step,
+        )
+        if reader_end_reason:
+            diagnostics["readerEndDetected"] = True
+            diagnostics["readerEndStopTriggered"] = True
+            diagnostics["readerEndReason"] = reader_end_reason
+            diagnostics["adaptiveArrowStopReason"] = "reader_end_detected"
+            diagnostics["autonomousStopReason"] = "reader_end_detected"
+            if stop_policy == "smart":
+                diagnostics["smartStopReason"] = "reader_end_detected"
+                diagnostics["smartStopTriggered"] = True
+            break
 
         if stop_policy == "duration":
             continue
@@ -1225,6 +1260,114 @@ def _run_adaptive_arrow_traversal(
     elif diagnostics["autonomousStopReason"] == "none":
         diagnostics["autonomousStopReason"] = diagnostics["adaptiveArrowStopReason"]
     return diagnostics
+
+
+def _evaluate_reader_end_stop(
+    page,
+    diagnostics: dict,
+    step: int,
+    stable_rounds: int,
+    current_sequence_length: int,
+    last_sequence_growth_step: int,
+) -> str | None:
+    if not diagnostics["readerEndDetectionEnabled"]:
+        return None
+    if diagnostics["adaptiveArrowGrowthEvents"] < 1:
+        return None
+    if current_sequence_length < diagnostics["readerEndMinSequenceLength"]:
+        return None
+    if stable_rounds < diagnostics["readerEndStableRoundsRequired"]:
+        return None
+    rounds_after_last_growth = (
+        step - last_sequence_growth_step if last_sequence_growth_step else step
+    )
+    diagnostics["readerEndRoundsAfterLastGrowth"] = rounds_after_last_growth
+    if rounds_after_last_growth < diagnostics["readerEndMaxRoundsAfterLastGrowth"]:
+        return None
+    comment_hint = (
+        _detect_reader_end_comment_hint(page)
+        if diagnostics["readerEndUseCommentHints"]
+        else False
+    )
+    scroll_boundary = (
+        _detect_scroll_boundary(page)
+        if diagnostics["readerEndUseScrollBoundary"]
+        else False
+    )
+    diagnostics["readerEndCommentHintDetected"] = comment_hint
+    diagnostics["readerEndScrollBoundaryDetected"] = scroll_boundary
+    if comment_hint:
+        return "comment_hint"
+    if scroll_boundary:
+        return "scroll_boundary"
+    return None
+
+
+def _detect_reader_end_comment_hint(page) -> bool:
+    try:
+        return bool(
+            page.evaluate(
+                """(terms) => {
+                    const isVisible = (element) => {
+                      const rect = element.getBoundingClientRect();
+                      const style = window.getComputedStyle(element);
+                      return rect.width > 60 && rect.height > 16 && style.visibility !== "hidden" && style.display !== "none";
+                    };
+                    const candidates = Array.from(document.querySelectorAll("section, div, aside, main, article, a, button"))
+                      .filter((element) => isVisible(element))
+                      .slice(0, 160);
+                    for (const element of candidates) {
+                      const markerText = `${element.id || ""} ${element.className || ""} ${element.getAttribute("aria-label") || ""} ${element.textContent || ""}`
+                        .trim()
+                        .toLowerCase()
+                        .slice(0, 500);
+                      if (terms.some((term) => markerText.includes(term))) {
+                        return true;
+                      }
+                    }
+                    return false;
+                }""",
+                [
+                    "comments",
+                    "comment",
+                    "discussion",
+                    "reviews",
+                    "leave a comment",
+                    "next chapter",
+                    "previous chapter",
+                ],
+            )
+        )
+    except Exception:
+        return False
+
+
+def _detect_scroll_boundary(page) -> bool:
+    try:
+        return bool(
+            page.evaluate(
+                """() => {
+                    const nearBottom = (element) => {
+                      if (!element) return false;
+                      const scrollTop = element.scrollTop || 0;
+                      const scrollHeight = element.scrollHeight || 0;
+                      const clientHeight = element.clientHeight || 0;
+                      if (scrollHeight <= 0 || clientHeight <= 0) return false;
+                      return scrollTop + clientHeight >= scrollHeight - 24;
+                    };
+                    if (nearBottom(document.scrollingElement || document.documentElement || document.body)) {
+                      return true;
+                    }
+                    const elements = Array.from(document.querySelectorAll("*")).filter((element) => {
+                      const rect = element.getBoundingClientRect();
+                      return rect.width > 120 && rect.height > 120 && element.scrollHeight > element.clientHeight + 24;
+                    }).slice(0, 20);
+                    return elements.some((element) => nearBottom(element));
+                }"""
+            )
+        )
+    except Exception:
+        return False
 
 
 def _filter_adaptive_unsafe_actions(
@@ -1635,6 +1778,31 @@ def _default_autonomous_diagnostics(args, image_count_before_actions: int) -> di
         "adaptiveArrowUrlChanged": False,
         "adaptiveArrowInitialUrl": "",
         "adaptiveArrowFinalUrl": "",
+        "readerEndDetectionEnabled": _is_true(
+            getattr(args, "reader_end_detection_enabled", "true")
+        ),
+        "readerEndDetected": False,
+        "readerEndStopTriggered": False,
+        "readerEndStableRoundsRequired": int(
+            getattr(args, "reader_end_stable_rounds", 6)
+        ),
+        "readerEndStableRoundsObserved": 0,
+        "readerEndMinSequenceLength": int(
+            getattr(args, "reader_end_min_sequence_length", 3)
+        ),
+        "readerEndMaxRoundsAfterLastGrowth": int(
+            getattr(args, "reader_end_max_rounds_after_last_growth", 10)
+        ),
+        "readerEndRoundsAfterLastGrowth": 0,
+        "readerEndUseCommentHints": _is_true(
+            getattr(args, "reader_end_use_comment_hints", "true")
+        ),
+        "readerEndUseScrollBoundary": _is_true(
+            getattr(args, "reader_end_use_scroll_boundary", "true")
+        ),
+        "readerEndCommentHintDetected": False,
+        "readerEndScrollBoundaryDetected": False,
+        "readerEndReason": "none",
         "rightArrowNavigationEnabled": _is_true(
             getattr(args, "right_arrow_nav_enabled", "true")
         ),
